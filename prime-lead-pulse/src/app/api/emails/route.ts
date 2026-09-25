@@ -72,11 +72,7 @@ export async function GET(request: Request) {
     let query = supabase
       .from('emails')
       .select(`
-        id,
-        sender_email,
-        recipient,
-        subject,
-        created_at,
+        *,
         tracking_events (
           id,
           event_type,
