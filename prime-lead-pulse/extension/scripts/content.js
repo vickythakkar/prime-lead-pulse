@@ -320,7 +320,7 @@ function injectSentBadges() {
         }
       }
 
-      const triggerPanel = (e) => {
+      const triggerPanel = (e, isHover) => {
         e.stopPropagation();
         let to = 'Unknown';
         const senderEl = row.querySelector('.yW');
@@ -334,12 +334,18 @@ function injectSentBadges() {
         const dateEl = row.querySelector('.xW.xY span');
         const sentDate = dateEl ? dateEl.getAttribute('title') || dateEl.textContent : '';
         
-        showPanel(record || { recipient: recipientEmail, subject, status: 'Untracked', opens: 0, clicks: 0, events: [] }, subject, to, sentDate);
+        showPanel(record || { recipient: recipientEmail, subject, status: 'Untracked', opens: 0, clicks: 0, events: [] }, subject, to, sentDate, isHover);
       };
 
       badge.style.cursor = 'pointer';
-      badge.onclick = triggerPanel;
-      badge.onmouseenter = triggerPanel;
+      badge.onclick = (e) => triggerPanel(e, false);
+      badge.onmouseenter = (e) => triggerPanel(e, true);
+      badge.onmouseleave = (e) => {
+        const panel = document.getElementById('plp-panel');
+        if (panel && panel.dataset.pinned === 'false') {
+          removePanel();
+        }
+      };
     } catch (err) {
       console.error('Prime Lead Pulse: Error injecting badge for row', err);
     }
@@ -353,7 +359,7 @@ function removePanel() {
   panelEmailId = null;
 }
 
-function showPanel(record, subject, to, sentDate) {
+function showPanel(record, subject, to, sentDate, isHover = false) {
   removePanel();
   if (!record) return;
   panelEmailId = record.id;
@@ -361,6 +367,7 @@ function showPanel(record, subject, to, sentDate) {
   const panel = document.createElement('div');
   panel.id = 'plp-panel';
   panel.className = 'plp-panel';
+  panel.dataset.pinned = isHover ? 'false' : 'true';
 
   const statusClass = record.status === 'Clicked' ? 'plp-status-clicked'
     : record.status === 'Opened' ? 'plp-status-opened' : 'plp-status-untracked';
