@@ -293,7 +293,8 @@ function injectSentBadges() {
       } else if (record.clicks > 0) {
         badge.className += ' plp-badge-clicked';
         badge.textContent = `Clicked ${record.clicks}x`;
-        badge.title = '';
+        const clickedUrls = [...new Set((record.events || []).filter(e => e.event_type === 'click' && e.url).map(e => e.url))];
+        badge.title = clickedUrls.length > 0 ? 'Clicked Links:\n' + clickedUrls.map(u => '🔗 ' + u).join('\n') : '';
       } else if (record.opens > 0) {
         badge.className += ' plp-badge-opened';
         badge.textContent = `Opened ${record.opens}x`;
@@ -319,8 +320,7 @@ function injectSentBadges() {
         }
       }
 
-      badge.style.cursor = 'pointer';
-      badge.onclick = (e) => {
+      const triggerPanel = (e) => {
         e.stopPropagation();
         let to = 'Unknown';
         const senderEl = row.querySelector('.yW');
@@ -336,6 +336,10 @@ function injectSentBadges() {
         
         showPanel(record || { recipient: recipientEmail, subject, status: 'Untracked', opens: 0, clicks: 0, events: [] }, subject, to, sentDate);
       };
+
+      badge.style.cursor = 'pointer';
+      badge.onclick = triggerPanel;
+      badge.onmouseenter = triggerPanel;
     } catch (err) {
       console.error('Prime Lead Pulse: Error injecting badge for row', err);
     }
