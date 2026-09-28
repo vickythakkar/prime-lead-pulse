@@ -266,13 +266,13 @@ async function pollForNotifications() {
       const cleanSubject = (email.subject || '').replace(/^((Re|Fwd|Fw|Aw|Wg|Tr|Rv|Sv|Vs|Vl|Res|Enc):\s*)+/ig, '').trim().toLowerCase();
       const key = `${cleanSubject}_${ev.event_type}`;
       if (!grouped[key]) {
-        grouped[key] = { email, eventType: ev.event_type, count: 0 };
+        grouped[key] = { email, eventType: ev.event_type, count: 0, url: ev.url };
       }
       grouped[key].count++;
     }
 
     for (const key of Object.keys(grouped)) {
-      const { email, eventType, count } = grouped[key];
+      const { email, eventType, count, url } = grouped[key];
       const isClick = eventType === 'click';
       const title = isClick ? 'Link Clicked' : 'Email Opened';
       const recipient = email.recipient || 'Unknown Recipient';
