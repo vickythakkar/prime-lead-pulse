@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // Known bot/scanner user-agent patterns
 const BOT_UA_PATTERNS = [
   /bot/i, /crawler/i, /spider/i, /slurp/i, /mediapartners/i,
@@ -41,11 +44,15 @@ export async function GET(
 
   try {
     // 1. BOT FILTER: Check if the email is too new (< 120 seconds old)
-    const { data: emailData } = await supabase
+    const { data: emailData, error: emailError } = await supabase
       .from('emails')
       .select('created_at')
       .eq('id', emailId)
       .single();
+
+    if (emailError || !emailData) {
+      return new NextResponse('Invalid tracking ID', { status: 404 });
+    }
 
     if (emailData) {
       const emailAgeMs = Date.now() - new Date(emailData.created_at).getTime();

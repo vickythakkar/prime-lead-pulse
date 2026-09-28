@@ -231,6 +231,11 @@ async function pollForNotifications() {
       
       const { emails } = await res.json();
       
+      // Save emails for content.js so it doesn't have to poll the API
+      if (currentSession.user?.email) {
+        await chrome.storage.local.set({ [`cached_emails_${currentSession.user.email}`]: emails });
+      }
+
       for (const email of emails) {
         if (!email.tracking_events) continue;
         for (const ev of email.tracking_events) {
@@ -244,7 +249,12 @@ async function pollForNotifications() {
       }
     }
 
-    await chrome.storage.local.set({ knownEventIds: Array.from(currentKnownIds) });
+    const MAX_EVENTS = 1000;
+    let knownArray = Array.from(currentKnownIds);
+    if (knownArray.length > MAX_EVENTS) {
+      knownArray = knownArray.slice(knownArray.length - MAX_EVENTS);
+    }
+    await chrome.storage.local.set({ knownEventIds: knownArray });
 
     const grouped = {};
     for (const { ev, email } of newEventsToNotify) {
@@ -253,7 +263,7 @@ async function pollForNotifications() {
 
       // Group by normalized subject instead of email.id so that multiple opens in the same thread
       // (e.g., "Subject" and "Re: Subject") are bundled into a single notification.
-      const cleanSubject = (email.subject || '').replace(/^((Re|Fwd|Fw):\s*)+/ig, '').trim().toLowerCase();
+      const cleanSubject = (email.subject || '').replace(/^((Re|Fwd|Fw|Aw|Wg|Tr|Rv|Sv|Vs|Vl|Res|Enc):\s*)+/ig, '').trim().toLowerCase();
       const key = `${cleanSubject}_${ev.event_type}`;
       if (!grouped[key]) {
         grouped[key] = { email, eventType: ev.event_type, count: 0 };

@@ -154,15 +154,13 @@ function formatEventTime(iso) {
 }
 
 function getActiveSenderEmail() {
-  // Try to get from profile icon aria-label (e.g. "Google Account: Vicky (vicky@diyflatfee.com)")
-  const accountBtn = document.querySelector('a[aria-label*="Google Account"]');
+  const accountBtn = document.querySelector('a[aria-label*="@"]');
   if (accountBtn) {
-    const match = accountBtn.getAttribute('aria-label').match(/\(([^)]+@[^)]+)\)/);
+    const match = accountBtn.getAttribute('aria-label').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
     if (match) return match[1];
   }
-  // Fallback: extract u/N from URL
-  const urlMatch = location.pathname.match(/\/u\/(\d+)\//);
-  return urlMatch ? `account_${urlMatch[1]}` : null;
+  const titleMatch = document.title.match(/- ([^\s]+@[^\s]+\.[^\s]+) - Gmail/);
+  return titleMatch ? titleMatch[1] : null;
 }
 
 // ARCHITECTURE: Subject is the PRIMARY matching criterion (proven reliable in detail view).
@@ -171,7 +169,7 @@ function getActiveSenderEmail() {
 function findEmail(subject, recipientEmail) {
   if (!subject || emailCache.length === 0) return null;
 
-  const cleanPrefixes = s => (s || '').replace(/^((Re|Fwd):\s*)+/ig, '').trim();
+  const cleanPrefixes = s => (s || '').replace(/^((Re|Fwd|Fw|Aw|Wg|Tr|Rv|Sv|Vs|Vl|Res|Enc):\s*)+/ig, '').trim();
   const strip = s => cleanPrefixes(s).toLowerCase().replace(/[^a-z0-9]/g, '');
   const uiSubj = strip(subject);
   if (uiSubj.length === 0) return null;
@@ -448,7 +446,7 @@ function injectEmailViewFeatures() {
 function injectComposeTool(composeWindow) {
   if (composeWindow.querySelector('.plp-compose-toolbar')) return;
 
-  const sendBtn = composeWindow.querySelector('div[aria-label^="Send"]');
+  const sendBtn = composeWindow.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
   if (!sendBtn) return; 
 
   const bottomToolbarWrapper = sendBtn.closest('.gU.Up') || sendBtn.closest('table');
@@ -589,7 +587,11 @@ document.addEventListener('click', async (e) => {
   if (!checkbox || !checkbox.checked) return;
 
   // Prevent duplicate CREATE_EMAIL if user double-clicks Send
-  if (compose.dataset.plpSending === 'true') return;
+  if (compose.dataset.plpSending === 'true') {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   compose.dataset.plpSending = 'true';
 
   e.preventDefault();
@@ -647,6 +649,7 @@ document.addEventListener('click', async (e) => {
       const err = response?.data?.error || response?.error || 'Unknown Error';
       alert(`Prime Lead Pulse: Failed to track.\nError details: ${err}`);
       btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+      compose.dataset.plpSending = 'false';
     }
   });
 }, true);
@@ -667,25 +670,16 @@ const observer = new MutationObserver(() => {
 
 observer.observe(document.body, { childList: true, subtree: true });
 
-// ------ Stats Polling ------
-// Background.js alarm handles notifications independently, so we only need to refresh badge UI here.
-// ONLY poll when the tab is actively visible to save massive API bandwidth and prevent Vercel limits.
-setInterval(() => {
-  if (document.visibilityState === 'visible') {
-    fetchEmailStats().then(() => {
-      injectSentBadges();
-      injectEmailViewFeatures();
-    });
-  }
-}, 30000); // 30 seconds
-
-// Instantly refresh when the user switches back to this Gmail tab
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    fetchEmailStats().then(() => {
-      injectSentBadges();
-      injectEmailViewFeatures();
-    });
+// ------ Storage Listener (No Polling) ------
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local') {
+    const currentEmail = getActiveSenderEmail();
+    if (currentEmail && changes[`cached_emails_${currentEmail}`]) {
+      fetchEmailStats().then(() => {
+        injectSentBadges();
+        injectEmailViewFeatures();
+      });
+    }
   }
 });
 
