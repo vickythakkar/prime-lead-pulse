@@ -247,7 +247,8 @@ def build_message(to_name, to_email, from_user, sender_name, is_founder):
 
     # Inject tracking pixel if enabled
     if TRACKING_ENABLED:
-        encoded_email = base64.b64encode(to_email.encode()).decode()  # standard base64
+        # Base64url-encode the recipient identifier as required by the dashboard
+        encoded_email = base64.urlsafe_b64encode(to_email.encode()).decode().rstrip("=")
         pixel_tag = (
             f'<img src="{TRACKING_URL}?id={encoded_email}&ctx={TRACKING_CTX}" '
             f'width="1" height="1" alt="" style="display:none" />'
