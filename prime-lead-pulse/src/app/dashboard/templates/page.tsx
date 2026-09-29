@@ -7,7 +7,7 @@ import { MailPlus, LayoutTemplate, Trash2, X } from 'lucide-react';
 
 export default function TemplatesPage() {
   const { user, loading, logout, supabase } = useDashboardData();
-  const [templates, setTemplates] = useState<any[]>([]);
+  const [templates, setTemplates] = useState<Record<string, string>[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({ name: '', subject: '', body: '' });
 

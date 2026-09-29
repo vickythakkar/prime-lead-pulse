@@ -6,7 +6,7 @@ import { format } from 'date-fns';
 
 export default function RecentActivity({ emails }: { emails: ProcessedEmail[] }) {
   // Flatten all events
-  const allEvents: any[] = [];
+  const allEvents: Record<string, any>[] = [];
   emails.forEach(email => {
     email.events.forEach(ev => {
       allEvents.push({
@@ -25,7 +25,7 @@ export default function RecentActivity({ emails }: { emails: ProcessedEmail[] })
   const recent = allEvents.slice(0, 8);
 
   const StatusBadge = ({ status }: { status: string }) => {
-    const styles: any = {
+    const styles: Record<string, string> = {
       Clicked: 'bg-[#f0fdf4] text-[#166534] border border-[#bbf7d0]',
       Opened: 'bg-[#f8fafc] text-[#334155] border border-[#e2e8f0]',
       Sent: 'bg-white text-slate-400 border border-slate-200',

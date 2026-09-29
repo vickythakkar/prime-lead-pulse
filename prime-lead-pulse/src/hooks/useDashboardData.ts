@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/utils/supabase';
 import { useRouter, usePathname } from 'next/navigation';
+import { User } from '@supabase/supabase-js';
 
 interface Email {
   id: string;
@@ -36,40 +37,12 @@ export interface ProcessedEmail {
 
 export function useDashboardData() {
   const [emails, setEmails] = useState<ProcessedEmail[]>([]);
-  const [templates, setTemplates] = useState<any[]>([]);
+  const [templates, setTemplates] = useState<Record<string, any>[]>([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const router = useRouter();
 
-  useEffect(() => {
-    fetchData();
-
-    // Set up Realtime subscriptions
-    const channel = supabase.channel('dashboard_changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'tracking_events' },
-        () => {
-          console.log('Realtime update: tracking_events changed. Refetching...');
-          fetchData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'emails' },
-        () => {
-          console.log('Realtime update: emails changed. Refetching...');
-          fetchData();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  const fetchData = async () => {
+  async function fetchData() {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { router.push('/'); return; }
 
@@ -115,6 +88,35 @@ export function useDashboardData() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+
+    // Set up Realtime subscriptions
+    const channel = supabase.channel('dashboard_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tracking_events' },
+        () => {
+          console.log('Realtime update: tracking_events changed. Refetching...');
+          fetchData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'emails' },
+        () => {
+          console.log('Realtime update: emails changed. Refetching...');
+          fetchData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const logout = async () => {
     await supabase.auth.signOut();

@@ -142,8 +142,8 @@ export default function DashboardPage() {
   const pct = (n: number) => totalEmails > 0 ? Math.round((n / totalEmails) * 100) : 0;
   const clickRate = totalEmails > 0 ? ((emails.filter(e => e.clicks > 0).length / totalEmails) * 100).toFixed(1) : '0.0';
 
-  const BucketBar = ({ label, count, color }: { label: string; count: number; color: string }) => (
-    <div className="flex items-center gap-4 text-sm mb-3.5 last:mb-0">
+  const renderBucketBar = (label: string, count: number, color: string) => (
+    <div className="flex items-center gap-4 text-sm mb-3.5 last:mb-0" key={label}>
       <span className="w-24 text-slate-500 text-[11px] font-medium">{label}</span>
       <div className="flex-1 bg-slate-100 rounded-full h-[6px]">
         <div className={`${color} h-[6px] rounded-full`} style={{ width: `${pct(count)}%` }} />
@@ -213,11 +213,11 @@ export default function DashboardPage() {
             </div>
 
             <div>
-              <BucketBar label="Within 1 hour" count={buckets.under1h} color="bg-gradient-to-r from-emerald-400 to-emerald-500" />
-              <BucketBar label="1 - 4 hours" count={buckets.under4h} color="bg-gradient-to-r from-amber-300 to-amber-400" />
-              <BucketBar label="Within 2 days" count={buckets.under2d} color="bg-gradient-to-r from-orange-400 to-orange-500" />
-              <BucketBar label="2+ days" count={buckets.over2d} color="bg-gradient-to-r from-rose-400 to-rose-500" />
-              <BucketBar label="Never opened" count={buckets.never} color="bg-slate-300" />
+              {renderBucketBar("Within 1 hour", buckets.under1h, "bg-gradient-to-r from-emerald-400 to-emerald-500")}
+              {renderBucketBar("1 - 4 hours", buckets.under4h, "bg-gradient-to-r from-amber-300 to-amber-400")}
+              {renderBucketBar("Within 2 days", buckets.under2d, "bg-gradient-to-r from-orange-400 to-orange-500")}
+              {renderBucketBar("2+ days", buckets.over2d, "bg-gradient-to-r from-rose-400 to-rose-500")}
+              {renderBucketBar("Never opened", buckets.never, "bg-slate-300")}
             </div>
             </div>
           </div>
