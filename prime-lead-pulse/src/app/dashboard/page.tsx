@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import DashboardLayout from '@/components/DashboardLayout';
 import Link from 'next/link';
+import { supabase } from '@/utils/supabase';
 import HighInterest from '@/components/HighInterest';
 import RecentActivity from '@/components/RecentActivity';
 import ActivityTrends from '@/components/ActivityTrends';
@@ -74,6 +75,39 @@ function getTimeToOpenLabel(ms: number) {
 
 export default function DashboardPage() {
   const { emails, templates, loading, user, logout } = useDashboardData();
+  const [restorePrompt, setRestorePrompt] = useState<{hasBackup: boolean, daysRemaining: number} | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  useEffect(() => {
+    if (user && emails.length === 0) {
+      checkBackup();
+    }
+  }, [user, emails.length]);
+
+  const checkBackup = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    const res = await fetch('/api/auth/restore', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'check' })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.hasBackup) setRestorePrompt(data);
+    }
+  };
+
+  const handleRestore = async (action: 'restore' | 'discard') => {
+    setIsRestoring(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    await fetch('/api/auth/restore', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    window.location.reload();
+  };
 
   if (loading) {
     return (

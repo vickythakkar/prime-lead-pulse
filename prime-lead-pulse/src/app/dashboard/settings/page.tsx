@@ -3,9 +3,35 @@
 import { useDashboardData } from '@/hooks/useDashboardData';
 import DashboardLayout from '@/components/DashboardLayout';
 import { User, AlertTriangle } from 'lucide-react';
+import { useState } from 'react';
+import { supabase } from '@/utils/supabase';
 
 export default function SettingsPage() {
   const { user, loading, logout } = useDashboardData();
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteAccount = async () => {
+    if (!confirm('Are you absolutely sure you want to delete your account? This will hide your data and disable your login. You will have 30 days to restore it if you sign up again.')) return;
+    setIsDeleting(true);
+    
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/auth/delete', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}` }
+      });
+      if (res.ok) {
+        await supabase.auth.signOut();
+        window.location.href = '/';
+      } else {
+        alert('Failed to delete account');
+        setIsDeleting(false);
+      }
+    } catch (err) {
+      alert('An error occurred');
+      setIsDeleting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -92,8 +118,12 @@ export default function SettingsPage() {
               <h3 className="text-[14px] font-bold text-slate-900 mb-1">Delete Account & Data</h3>
               <p className="text-[12px] text-slate-500">Permanently delete your account and all tracking data. This action cannot be undone.</p>
             </div>
-            <button className="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-[13px] font-bold hover:bg-red-100 transition-colors shrink-0">
-              Delete Account
+            <button 
+              onClick={handleDeleteAccount}
+              disabled={isDeleting}
+              className="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-[13px] font-bold hover:bg-red-100 transition-colors shrink-0 disabled:opacity-50"
+            >
+              {isDeleting ? 'Deleting...' : 'Delete Account'}
             </button>
           </div>
         </div>
