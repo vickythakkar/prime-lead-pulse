@@ -15,6 +15,8 @@ interface Email {
     event_type: string;
     url: string | null;
     created_at: string;
+    user_agent: string | null;
+    ip_address: string | null;
   }[];
 }
 
@@ -41,6 +43,30 @@ export function useDashboardData() {
 
   useEffect(() => {
     fetchData();
+
+    // Set up Realtime subscriptions
+    const channel = supabase.channel('dashboard_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tracking_events' },
+        () => {
+          console.log('Realtime update: tracking_events changed. Refetching...');
+          fetchData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'emails' },
+        () => {
+          console.log('Realtime update: emails changed. Refetching...');
+          fetchData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const fetchData = async () => {

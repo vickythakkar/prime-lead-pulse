@@ -1,6 +1,6 @@
 'use client';
 
-import { Eye, MousePointerClick, X } from 'lucide-react';
+import { Eye, MousePointerClick, X, Monitor, Smartphone, Globe } from 'lucide-react';
 import { ProcessedEmail } from '@/hooks/useDashboardData';
 
 function formatDate(iso: string) {
@@ -8,6 +8,30 @@ function formatDate(iso: string) {
     month: 'short', day: 'numeric', year: 'numeric',
     hour: 'numeric', minute: '2-digit',
   });
+}
+
+
+function parseDevice(ua: string | null) {
+  if (!ua) return { device: 'Unknown Device', icon: Globe };
+  if (ua.includes('GoogleImageProxy')) return { device: 'Gmail App/Web', icon: Globe };
+  
+  let os = '';
+  let icon = Monitor;
+  if (ua.includes('Windows')) os = 'Windows';
+  else if (ua.includes('Mac OS')) os = 'Mac OS';
+  else if (ua.includes('Linux')) os = 'Linux';
+  else if (ua.includes('Android')) { os = 'Android'; icon = Smartphone; }
+  else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) { os = 'iOS'; icon = Smartphone; }
+
+  let browser = '';
+  if (ua.includes('Chrome') && !ua.includes('Edg')) browser = 'Chrome';
+  else if (ua.includes('Safari') && !ua.includes('Chrome')) browser = 'Safari';
+  else if (ua.includes('Firefox')) browser = 'Firefox';
+  else if (ua.includes('Edg')) browser = 'Edge';
+  
+  if (!os && !browser) return { device: 'Unknown Device', icon: Globe };
+  if (os && browser) return { device: ${os} · , icon };
+  return { device: os || browser, icon };
 }
 
 export default function ActivityModal({ email, onClose }: { email: ProcessedEmail; onClose: () => void }) {
@@ -53,6 +77,23 @@ export default function ActivityModal({ email, onClose }: { email: ProcessedEmai
                     </span>
                     <span className="text-xs text-gray-400">{formatDate(ev.created_at)}</span>
                   </div>
+                  
+                  {/* Device Info */}
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+                    {(() => {
+                      const { device, icon: DeviceIcon } = parseDevice(ev.user_agent);
+                      return (
+                        <>
+                          <DeviceIcon size={12} className="text-slate-400" />
+                          <span>{device}</span>
+                          {ev.ip_address && !ev.user_agent?.includes('GoogleImageProxy') && (
+                            <span className="text-slate-300 ml-1">({ev.ip_address})</span>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+
                   {ev.event_type === 'click' && ev.url && (
                     <div className="mt-2 bg-gray-50 rounded-lg px-3 py-2">
                       <p className="text-xs text-gray-500 font-medium mb-0.5">Clicked Link:</p>

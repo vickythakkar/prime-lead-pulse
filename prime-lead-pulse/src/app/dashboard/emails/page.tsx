@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useDashboardData, ProcessedEmail } from '@/hooks/useDashboardData';
 import DashboardLayout from '@/components/DashboardLayout';
 import ActivityModal from '@/components/ActivityModal';
-import { Eye, MousePointerClick, Search, Trash2 } from 'lucide-react';
+import { Eye, MousePointerClick, Search, Trash2, Download } from 'lucide-react';
 
 function StatusBadge({ status }: { status: ProcessedEmail['status'] }) {
   const styles = {
@@ -45,6 +45,29 @@ export default function TrackedEmailsPage() {
 
   const totalPages = Math.ceil(filtered.length / PER_PAGE);
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  const handleExportCSV = () => {
+    if (emails.length === 0) return;
+    const headers = ['Subject', 'Recipient', 'Status', 'Opens', 'Clicks', 'Sent Date', 'Last Opened'];
+    const rows = emails.map(e => [
+      "",
+      "",
+      e.status,
+      e.opens,
+      e.clicks,
+      formatDate(e.created_at),
+      formatDate(e.last_opened)
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', prime-lead-pulse-export-.csv);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
 
   if (loading) {
     return (
