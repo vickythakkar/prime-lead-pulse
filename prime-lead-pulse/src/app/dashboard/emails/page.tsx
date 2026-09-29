@@ -49,8 +49,8 @@ export default function TrackedEmailsPage() {
     if (emails.length === 0) return;
     const headers = ['Subject', 'Recipient', 'Status', 'Opens', 'Clicks', 'Sent Date', 'Last Opened'];
     const rows = emails.map(e => [
-      "",
-      "",
+      `"${e.subject.replace(/"/g, '""')}"`,
+      `"${e.recipient.replace(/"/g, '""')}"`,
       e.status,
       e.opens,
       e.clicks,
@@ -62,7 +62,7 @@ export default function TrackedEmailsPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', prime-lead-pulse-export-.csv);
+    link.setAttribute('download', `prime-lead-pulse-export-${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

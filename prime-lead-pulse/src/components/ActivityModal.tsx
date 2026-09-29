@@ -30,7 +30,7 @@ function parseDevice(ua: string | null) {
   else if (ua.includes('Edg')) browser = 'Edge';
   
   if (!os && !browser) return { device: 'Unknown Device', icon: Globe };
-  if (os && browser) return { device: ${os} · , icon };
+  if (os && browser) return { device: `${os} · ${browser}`, icon };
   return { device: os || browser, icon };
 }
 
