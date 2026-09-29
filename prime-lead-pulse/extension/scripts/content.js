@@ -166,7 +166,7 @@ function getActiveSenderEmail() {
 // ARCHITECTURE: Subject is the PRIMARY matching criterion (proven reliable in detail view).
 // Recipient is ONLY used as a tiebreaker when multiple emails share the same subject.
 // When duplicates exist, prefer the record with MORE tracking events (the pixel is linked to ONE record).
-function findEmail(subject, recipientEmail) {
+function findEmail(subject, recipientEmailOrArray) {
   if (!subject || emailCache.length === 0) return null;
 
   const cleanPrefixes = s => (s || '').replace(/^((Re|Fwd|Fw|Aw|Wg|Tr|Rv|Sv|Vs|Vl|Res|Enc):\s*)+/ig, '').trim();
@@ -174,7 +174,6 @@ function findEmail(subject, recipientEmail) {
   const uiSubj = strip(subject);
   if (uiSubj.length === 0) return null;
 
-  // Step 1: Collect ALL emails whose subject matches (bidirectional substring)
   const subjectMatches = [];
   for (const e of emailCache) {
     try {
@@ -189,26 +188,26 @@ function findEmail(subject, recipientEmail) {
   if (subjectMatches.length === 0) return null;
   if (subjectMatches.length === 1) return subjectMatches[0];
 
-  // Step 2: Multiple matches — try recipient to narrow down
   let candidates = subjectMatches;
-  if (recipientEmail) {
-    const cleanRecip = recipientEmail.replace(/^To:\s*/i, '').trim().toLowerCase();
-    if (cleanRecip) {
+  if (recipientEmailOrArray) {
+    const recips = Array.isArray(recipientEmailOrArray) ? recipientEmailOrArray : [recipientEmailOrArray];
+    const cleanRecips = recips.map(r => r.replace(/^To:\s*/i, '').trim().toLowerCase()).filter(Boolean);
+    
+    if (cleanRecips.length > 0) {
       const recipMatches = subjectMatches.filter(e => {
         const dbRecip = (e.recipient || '').toLowerCase();
-        return dbRecip.includes(cleanRecip) || cleanRecip.includes(dbRecip);
+        return cleanRecips.some(cr => dbRecip.includes(cr) || cr.includes(dbRecip));
       });
       if (recipMatches.length > 0) candidates = recipMatches;
     }
   }
 
-  // Step 3: Among remaining candidates, prefer the one with the MOST tracking activity.
-  // This handles duplicate CREATE_EMAIL records — the pixel URL is tied to ONE record,
-  // so the record with events is the "real" one.
+  // Sort by created_at descending (newest email first) rather than activity.
+  // Activity sorting causes OLD emails with opens to hijack NEW emails without opens!
   candidates.sort((a, b) => {
-    const aActivity = (a.opens || 0) + (a.clicks || 0);
-    const bActivity = (b.opens || 0) + (b.clicks || 0);
-    return bActivity - aActivity; // Most activity first
+    const dateA = new Date(a.created_at || 0).getTime();
+    const dateB = new Date(b.created_at || 0).getTime();
+    return dateB - dateA;
   });
 
   return candidates[0];
@@ -427,7 +426,8 @@ function injectEmailViewFeatures() {
   if (!subjectEl) return;
 
   const subject = subjectEl.textContent.trim();
-  const record = findEmail(subject, null);
+  const allEmailsInView = Array.from(document.querySelectorAll('[email]')).map(el => el.getAttribute('email')).filter(Boolean);
+  const record = findEmail(subject, allEmailsInView);
 
   // We NO LONGER auto-open the panel here. The user must click the Pill or the "View Activity" button.
   if (!record) {
