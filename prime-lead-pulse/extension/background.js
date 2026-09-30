@@ -125,7 +125,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           body: JSON.stringify(request.payload)
         }, session, apiUrl, senderEmail);
 
-        const data = await res.json();
+                let data;
+        const text = await res.text();
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          throw new Error(`Server returned non-JSON response (Status: ${res.status}). This usually means the server is down, timed out, or the API URL is incorrect. Response snippet: ${text.substring(0, 100)}...`);
+        }
         sendResponse({ success: res.ok, data });
       } catch (err) {
         let errorMsg = err.message;
@@ -155,7 +161,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
         }, session, apiUrl, senderEmail);
 
-        const data = await res.json();
+                let data;
+        const text = await res.text();
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          throw new Error(`Server returned non-JSON response (Status: ${res.status}). This usually means the server is down, timed out, or the API URL is incorrect. Response snippet: ${text.substring(0, 100)}...`);
+        }
         sendResponse({ success: res.ok, data });
       } catch (err) {
         let errorMsg = err.message;
@@ -185,7 +197,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
         }, session, apiUrl, senderEmail);
 
-        const data = await res.json();
+                let data;
+        const text = await res.text();
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          throw new Error(`Server returned non-JSON response (Status: ${res.status}). This usually means the server is down, timed out, or the API URL is incorrect. Response snippet: ${text.substring(0, 100)}...`);
+        }
         sendResponse({ success: res.ok, data });
       } catch (err) {
         let errorMsg = err.message;
