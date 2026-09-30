@@ -654,7 +654,8 @@ document.addEventListener('click', async (e) => {
         }
         checkbox.checked = false;
         btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-        btn.click();
+          delete compose.dataset.plpSending;
+          btn.click();
       });
     } else {
       const err = response?.data?.error || response?.error || 'Unknown Error';
