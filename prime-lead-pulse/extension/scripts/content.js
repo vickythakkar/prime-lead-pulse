@@ -632,42 +632,42 @@ document.addEventListener('click', async (e) => {
   }
   const subject = compose.querySelector('input[name="subjectbox"]')?.value ?? 'No Subject';
 
-  chrome.runtime.sendMessage({
-    action: 'CREATE_EMAIL',
-    payload: { sender_email: senderEmail, recipient, subject }
-  }, response => {
-    if (response?.success) {
-      const { email } = response.data;
-      chrome.storage.local.get(['apiUrl'], ({ apiUrl }) => {
-        const base = (apiUrl || '').replace(/\/$/, '');
-        const body = compose.querySelector('div[aria-label="Message Body"]');
-        if (body) {
-          const pixel = document.createElement('img');
-          pixel.src = `${base}/api/track/pixel/${email.id}`;
-          pixel.width = 1; pixel.height = 1; pixel.style.display = 'none';
-          body.appendChild(pixel);
+  // Generate a UUID locally so we don't have to wait for the Vercel server response
+  const emailId = crypto.randomUUID();
+  
+  // 1. Instantly inject the pixel and rewrite links synchronously
+  chrome.storage.local.get(['apiUrl'], ({ apiUrl }) => {
+    const base = (apiUrl || '').replace(/\/$/, '');
+    const body = compose.querySelector('div[aria-label="Message Body"]');
+    if (body) {
+      const pixel = document.createElement('img');
+      pixel.src = `${base}/api/track/pixel/${emailId}`;
+      pixel.width = 1; pixel.height = 1; pixel.style.display = 'none';
+      body.appendChild(pixel);
 
-          body.querySelectorAll('a').forEach(a => {
-            // Ignore mailto links
-            if (a.href.startsWith('mailto:')) return;
-            
-            // Ignore links inside the signature block or previous quoted replies
-            if (a.closest('.gmail_signature') || a.closest('.gmail_quote')) return;
-
-            a.href = `${base}/api/track/link/${email.id}?url=${encodeURIComponent(a.href)}`;
-          });
-        }
-        checkbox.checked = false;
-        btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-          delete compose.dataset.plpSending;
-          btn.click();
+      body.querySelectorAll('a').forEach(a => {
+        if (a.href.startsWith('mailto:')) return;
+        if (a.closest('.gmail_signature') || a.closest('.gmail_quote')) return;
+        a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(a.href)}`;
       });
-    } else {
-      const err = response?.data?.error || response?.error || 'Unknown Error';
-      alert(`Prime Lead Pulse: Failed to track.\nError details: ${err}`);
-      btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-      compose.dataset.plpSending = 'false';
     }
+    
+    // 2. Dispatch the real click to Gmail instantly (UI is completely unblocked)
+    checkbox.checked = false;
+    btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+    delete compose.dataset.plpSending;
+    btn.click();
+
+    // 3. Fire the tracking call to the backend asynchronously over the wall
+    chrome.runtime.sendMessage({
+      action: 'CREATE_EMAIL',
+      payload: { id: emailId, sender_email: senderEmail, recipient, subject }
+    }, response => {
+      // Do nothing on failure to avoid blocking user flow, just log it.
+      if (!response || !response.success) {
+        console.error("Prime Lead Pulse background tracking failed:", response?.error || response?.data?.error);
+      }
+    });
   });
 }, true);
 
