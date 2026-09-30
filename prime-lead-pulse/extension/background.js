@@ -128,7 +128,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const data = await res.json();
         sendResponse({ success: res.ok, data });
       } catch (err) {
-        sendResponse({ success: false, error: err.message });
+        sendResponse({ success: false, error: (apiUrl && apiUrl.includes("localhost") && err.message === "Failed to fetch") ? "Cannot connect to local server. Please log into the production dashboard (prime-lead-pulse.vercel.app) to update your extension connection." : err.message });
       }
     })();
     return true; 
@@ -154,7 +154,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const data = await res.json();
         sendResponse({ success: res.ok, data });
       } catch (err) {
-        sendResponse({ success: false, error: err.message });
+        sendResponse({ success: false, error: (apiUrl && apiUrl.includes("localhost") && err.message === "Failed to fetch") ? "Cannot connect to local server. Please log into the production dashboard (prime-lead-pulse.vercel.app) to update your extension connection." : err.message });
       }
     })();
     return true;
@@ -180,7 +180,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const data = await res.json();
         sendResponse({ success: res.ok, data });
       } catch (err) {
-        sendResponse({ success: false, error: err.message });
+        sendResponse({ success: false, error: (apiUrl && apiUrl.includes("localhost") && err.message === "Failed to fetch") ? "Cannot connect to local server. Please log into the production dashboard (prime-lead-pulse.vercel.app) to update your extension connection." : err.message });
       }
     })();
     return true;

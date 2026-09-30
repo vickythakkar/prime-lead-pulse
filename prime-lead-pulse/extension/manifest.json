@@ -20,10 +20,7 @@
     ]
   },
   "host_permissions": [
-    "*://mail.google.com/*",
-    "*://*.supabase.co/*",
-    "*://localhost/*",
-    "*://*.vercel.app/*"
+    "<all_urls>"
   ],
   "action": {
     "default_popup": "popup/index.html"
@@ -33,18 +30,32 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://mail.google.com/*"],
-      "js": ["scripts/content.js"],
-      "css": ["scripts/content.css"],
+      "matches": [
+        "*://mail.google.com/*"
+      ],
+      "js": [
+        "scripts/content.js"
+      ],
+      "css": [
+        "scripts/content.css"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["*://prime-lead-pulse.vercel.app/*", "*://localhost/*"],
-      "js": ["scripts/dashboard-sync.js"],
+      "matches": [
+        "*://*.vercel.app/*",
+        "*://localhost/*"
+      ],
+      "js": [
+        "scripts/dashboard-sync.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "externally_connectable": {
-    "matches": ["*://prime-lead-pulse.vercel.app/*", "*://localhost/*"]
+    "matches": [
+      "*://*.vercel.app/*",
+      "*://localhost/*"
+    ]
   }
 }
