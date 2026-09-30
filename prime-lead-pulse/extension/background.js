@@ -128,7 +128,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const data = await res.json();
         sendResponse({ success: res.ok, data });
       } catch (err) {
-        sendResponse({ success: false, error: (apiUrl && apiUrl.includes("localhost") && err.message === "Failed to fetch") ? "Cannot connect to local server. Please log into the production dashboard (prime-lead-pulse.vercel.app) to update your extension connection." : err.message });
+        let errorMsg = err.message;
+        if (errorMsg === "Failed to fetch") {
+            errorMsg = "Failed to fetch. If you are stuck on a localhost connection, please refresh the live Vercel dashboard to sync.";
+        }
+        sendResponse({ success: false, error: errorMsg });
       }
     })();
     return true; 
@@ -154,7 +158,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const data = await res.json();
         sendResponse({ success: res.ok, data });
       } catch (err) {
-        sendResponse({ success: false, error: (apiUrl && apiUrl.includes("localhost") && err.message === "Failed to fetch") ? "Cannot connect to local server. Please log into the production dashboard (prime-lead-pulse.vercel.app) to update your extension connection." : err.message });
+        let errorMsg = err.message;
+        if (errorMsg === "Failed to fetch") {
+            errorMsg = "Failed to fetch. If you are stuck on a localhost connection, please refresh the live Vercel dashboard to sync.";
+        }
+        sendResponse({ success: false, error: errorMsg });
       }
     })();
     return true;
@@ -180,7 +188,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const data = await res.json();
         sendResponse({ success: res.ok, data });
       } catch (err) {
-        sendResponse({ success: false, error: (apiUrl && apiUrl.includes("localhost") && err.message === "Failed to fetch") ? "Cannot connect to local server. Please log into the production dashboard (prime-lead-pulse.vercel.app) to update your extension connection." : err.message });
+        let errorMsg = err.message;
+        if (errorMsg === "Failed to fetch") {
+            errorMsg = "Failed to fetch. If you are stuck on a localhost connection, please refresh the live Vercel dashboard to sync.";
+        }
+        sendResponse({ success: false, error: errorMsg });
       }
     })();
     return true;
