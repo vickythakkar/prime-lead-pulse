@@ -34,21 +34,24 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { sender_email, recipient, subject } = body;
+    const { id, sender_email, recipient, subject } = body;
 
     if (!sender_email) {
       return NextResponse.json({ error: 'sender_email is required' }, { status: 400 });
     }
 
     // Insert the new email record
+    const insertPayload: any = {
+      user_id: user.id,
+      sender_email,
+      recipient,
+      subject,
+    };
+    if (id) insertPayload.id = id;
+
     const { data, error } = await supabase
       .from('emails')
-      .insert({
-        user_id: user.id,
-        sender_email,
-        recipient,
-        subject,
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
