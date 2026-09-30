@@ -72,14 +72,14 @@ export async function GET(
       }
     }
 
-    // 4. DEBOUNCE: Prevent duplicate opens within 30 seconds (was 5s, too short)
-    const thirtySecondsAgo = new Date(Date.now() - 30000).toISOString();
+    // 4. DEBOUNCE: Prevent duplicate opens within 15 seconds (was 5s, too short)
+    const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
     const { data: recentOpens } = await supabase
       .from('tracking_events')
       .select('id')
       .eq('email_id', emailId)
       .eq('event_type', 'open')
-      .gte('created_at', thirtySecondsAgo)
+      .gte('created_at', fifteenSecondsAgo)
       .limit(1);
 
     if (!recentOpens || recentOpens.length === 0) {

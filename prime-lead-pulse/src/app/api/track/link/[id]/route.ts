@@ -67,15 +67,15 @@ export async function GET(
       return NextResponse.redirect(targetUrl);
     }
 
-    // 3. DEBOUNCE: Prevent duplicate clicks on the same URL within 30 seconds
-    const thirtySecondsAgo = new Date(Date.now() - 30000).toISOString();
+    // 3. DEBOUNCE: Prevent duplicate clicks on the same URL within 15 seconds
+    const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
     const { data: recentClicks } = await supabase
       .from('tracking_events')
       .select('id')
       .eq('email_id', emailId)
       .eq('event_type', 'click')
       .eq('url', targetUrl)
-      .gte('created_at', thirtySecondsAgo)
+      .gte('created_at', fifteenSecondsAgo)
       .limit(1);
 
     if (!recentClicks || recentClicks.length === 0) {
