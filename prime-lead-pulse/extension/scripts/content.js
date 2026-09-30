@@ -252,6 +252,11 @@ function injectSentBadges() {
   // Otherwise the MutationObserver stamps "Untracked" on everything before the cache loads.
   if (!hasFetchedOnce) return;
 
+  const hash = window.location.hash.toLowerCase();
+  if (hash.includes('#draft') || hash.includes('in%3adraft') || hash.includes('in:draft')) {
+    return; // Don't show tracking badges in drafts view
+  }
+
   const emailRows = document.querySelectorAll('tr.zA');
   if (emailRows.length > 0 && !window.hasLoggedBadgeAttempt) {
     console.log(`Prime Lead Pulse: Found ${emailRows.length} email rows, cache has ${emailCache.length} tracked emails.`);
