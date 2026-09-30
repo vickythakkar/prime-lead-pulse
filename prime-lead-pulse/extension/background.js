@@ -188,8 +188,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // ------ Notification Polling ------
-// Poll every 30 seconds (alarms have a minimum of ~30s in MV3)
-chrome.alarms.create("pollStats", { periodInMinutes: 0.5 });
+// Poll every 15 seconds
+chrome.alarms.create("pollStats", { periodInMinutes: 0.25 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "pollStats") {
