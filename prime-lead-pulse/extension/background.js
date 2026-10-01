@@ -1,3 +1,38 @@
+
+async function processRetryQueue() {
+  const { retryQueue, apiUrl } = await chrome.storage.local.get(['retryQueue', 'apiUrl']);
+  if (!retryQueue || retryQueue.length === 0 || !apiUrl) return;
+  
+  const base = apiUrl.replace(/\/$/, '');
+  
+  // Create a copy of the queue so we can mutate it
+  let currentQueue = [...retryQueue];
+  
+  for (let i = currentQueue.length - 1; i >= 0; i--) {
+    const payload = currentQueue[i];
+    try {
+      const session = await getSessionForSender(payload.sender_email);
+      const res = await fetchWithAuth(`${base}/api/emails`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify(payload)
+      }, session, apiUrl, payload.sender_email);
+      
+      if (res.ok) {
+        // Success! Remove from queue
+        currentQueue.splice(i, 1);
+      }
+    } catch (e) {
+      // Keep it in the queue for next time
+    }
+  }
+  
+  await chrome.storage.local.set({ retryQueue: currentQueue });
+}
+
 // ============================================================
 // Prime Lead Pulse — Background Service Worker (v3)
 // Fixes:
@@ -167,6 +202,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'GET_STATS') {
     (async () => {
       try {
+        // Attempt to flush any pending created emails
+        await processRetryQueue().catch(e => console.error("Retry queue flush failed:", e));
         const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
         if (!apiUrl) throw new Error('API URL not set');
 
