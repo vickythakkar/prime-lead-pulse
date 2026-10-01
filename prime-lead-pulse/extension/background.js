@@ -15,6 +15,24 @@ async function fetchWithAuth(url, options, session, apiUrl, senderEmail) {
   let res = await fetch(url, options);
   
   if (res.status === 401 && session.refresh_token) {
+    // 1. Check if another request ALREADY refreshed the token while we were in-flight
+    const { session: currentSession, sessions: currentSessions } = await chrome.storage.local.get(['session', 'sessions']);
+    let latestSession = session;
+    
+    if (senderEmail && currentSessions && currentSessions[senderEmail]) {
+      latestSession = currentSessions[senderEmail];
+    } else if (currentSession) {
+      latestSession = currentSession;
+    }
+    
+    // If the token in storage has a different access_token, it means someone else refreshed it!
+    // We should NOT refresh again with our old token (which causes token reuse revocation).
+    // We should just instantly retry the request with the new token.
+    if (latestSession && latestSession.access_token !== session.access_token) {
+      options.headers['Authorization'] = `Bearer ${latestSession.access_token}`;
+      return await fetch(url, options);
+    }
+
     if (!refreshTokenPromise) {
       refreshTokenPromise = (async () => {
         try {
