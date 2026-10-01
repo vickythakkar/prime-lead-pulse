@@ -58,20 +58,22 @@ async function fetchWithAuth(url, options, session, apiUrl, senderEmail) {
               return newSession;
             }
           }
-          // If refresh fails for this session, clear it so it can fallback to the main session
-          if (senderEmail) {
-            const { sessions } = await chrome.storage.local.get(['sessions']);
-            if (sessions && sessions[senderEmail]) {
-              delete sessions[senderEmail];
-              await chrome.storage.local.set({ sessions });
-            }
-          }
           
-          // We MUST also clear the fallback 'session' if it matches the dead token, 
-          // otherwise it will get stuck in an infinite failure loop.
-          const { session: fallbackSession } = await chrome.storage.local.get(['session']);
-          if (fallbackSession && fallbackSession.access_token === session.access_token) {
-            await chrome.storage.local.remove('session');
+          // ONLY delete the session if the refresh token was actively rejected by Supabase (400, 401, 403).
+          // If it's a 5xx error (Vercel cold start timeout) or network error, KEEP the session so it can retry later!
+          if (refreshRes.status >= 400 && refreshRes.status < 500) {
+            if (senderEmail) {
+              const { sessions } = await chrome.storage.local.get(['sessions']);
+              if (sessions && sessions[senderEmail]) {
+                delete sessions[senderEmail];
+                await chrome.storage.local.set({ sessions });
+              }
+            }
+            
+            const { session: fallbackSession } = await chrome.storage.local.get(['session']);
+            if (fallbackSession && fallbackSession.access_token === session.access_token) {
+              await chrome.storage.local.remove('session');
+            }
           }
           
           return null;
