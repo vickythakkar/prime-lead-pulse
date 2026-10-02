@@ -103,7 +103,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   loginBtn.addEventListener('click', async () => {
-    const apiUrl = apiUrlInput.value.trim().replace(/\/$/, "");
+    const apiUrl = "https://prime-lead-pulse-sigma.vercel.app";
     const email = emailInput.value.trim();
     const password = passwordInput.value;
 

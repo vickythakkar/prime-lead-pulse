@@ -206,12 +206,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         
         // Show error to user visually
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'icon.gif',
-          title: 'Prime Lead Pulse Error',
-          message: `Failed to track email: ${errorMsg}`
-        });
+        
         
         sendResponse({ success: false, error: errorMsg });
       }
