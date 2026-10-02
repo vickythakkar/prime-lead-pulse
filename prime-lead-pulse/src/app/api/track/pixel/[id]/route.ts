@@ -69,16 +69,10 @@ export async function GET(
       .eq('id', emailId)
       .single();
 
-    // 3. BOT FILTER: Ignore opens within 5 seconds of sending to avoid immediate proxy scans
-    if (emailData) {
-      const sendTimeMs = tParam ? parseInt(tParam, 10) : new Date(emailData.created_at).getTime();
-      const emailAgeMs = Date.now() - sendTimeMs;
-      if (emailAgeMs < 5000) {
-        return new NextResponse(PIXEL_BUFFER, { status: 200, headers: PIXEL_HEADERS });
-      }
-    }
-
-    // 4. DEBOUNCE: Prevent duplicate opens within 15 seconds (was 5s, too short)
+    // REMOVED 5-second check here because GoogleImageProxy prefetches the image instantly upon delivery,
+    // and if we ignore it, Google caches the un-tracked image forever, preventing any future opens from tracking.
+    
+    // 3. DEBOUNCE: Prevent duplicate opens within 15 seconds (was 5s, too short)
     const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
     const { data: recentOpens } = await supabase
       .from('tracking_events')
