@@ -696,6 +696,24 @@ document.addEventListener('click', async (e) => {
       btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
       delete compose.dataset.plpSending;
       btn.click();
+      
+      // OPTIMISTIC CACHE UPDATE:
+      // Instantly add to local cache so if the user jumps to the Sent folder,
+      // it says "Unopened" instead of flashing "Untracked" while waiting for the server/poll.
+      emailCache.push({
+        id: emailId,
+        sender_email: senderEmail,
+        recipient: recipient,
+        subject: subject,
+        created_at: new Date().toISOString(),
+        status: 'Unopened',
+        opens: 0,
+        clicks: 0,
+        events: []
+      });
+      
+      // Force UI refresh of sent badges
+      setTimeout(injectSentBadges, 100);
 
       // 3. Fire the tracking call to the backend asynchronously over the wall
       chrome.runtime.sendMessage({
