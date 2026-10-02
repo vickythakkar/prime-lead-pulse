@@ -80,6 +80,8 @@ export async function GET(request: Request) {
           id,
           event_type,
           url,
+          user_agent,
+          ip_address,
           created_at
         )
       `)

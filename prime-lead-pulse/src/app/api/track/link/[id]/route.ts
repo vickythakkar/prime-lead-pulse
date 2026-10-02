@@ -60,7 +60,7 @@ export async function GET(
 
     if (emailData) {
       const emailAgeMs = Date.now() - new Date(emailData.created_at).getTime();
-      if (emailAgeMs < 120000) {
+      if (emailAgeMs < 5000) {
         // Bot scanner clicking links in a freshly sent email. Skip logging.
         return NextResponse.redirect(targetUrl);
       }
