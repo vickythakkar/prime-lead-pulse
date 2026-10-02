@@ -172,7 +172,7 @@ function getActiveSenderEmail() {
     const match = accountBtn.getAttribute('aria-label').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
     if (match) return match[1];
   }
-  const titleMatch = document.title.match(/- ([^\s]+@[^\s]+\.[^\s]+) - Gmail/);
+  const titleMatch = document.title.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
   return titleMatch ? titleMatch[1] : null;
 }
 
