@@ -186,7 +186,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         } catch (e) {
           throw new Error(`Server returned non-JSON response (Status: ${res.status}). This usually means the server is down, timed out, or the API URL is incorrect. Response snippet: ${text.substring(0, 100)}...`);
         }
-        sendResponse({ success: res.ok, data });
+        
+        if (!res.ok) {
+          throw new Error(`API Error: ${data?.error || res.statusText || 'Unknown server error'}`);
+        }
+        
+        sendResponse({ success: true, data });
       } catch (err) {
         // Queue for retry
         chrome.storage.local.get(['retryQueue'], async (data) => {
@@ -199,6 +204,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (errorMsg === "Failed to fetch") {
             errorMsg = "Failed to fetch. If you are stuck on a localhost connection, please refresh the live Vercel dashboard to sync.";
         }
+        
+        // Show error to user visually
+        chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icon.gif',
+          title: 'Prime Lead Pulse Error',
+          message: `Failed to track email: ${errorMsg}`
+        });
+        
         sendResponse({ success: false, error: errorMsg });
       }
     })();
