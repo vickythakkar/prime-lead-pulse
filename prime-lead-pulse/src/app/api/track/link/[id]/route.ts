@@ -42,6 +42,10 @@ export async function GET(
     return new NextResponse('Missing target URL', { status: 400 });
   }
 
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    return new NextResponse('Invalid URL', { status: 400 });
+  }
+
   try {
     // 1. BOT FILTER: Check if the email is too new (< 120 seconds old)
     const { data: emailData, error: emailError } = await supabase

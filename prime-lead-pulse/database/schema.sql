@@ -9,6 +9,7 @@ CREATE TABLE public.emails (
     sender_email VARCHAR NOT NULL,
     recipient VARCHAR,
     subject VARCHAR,
+    campaign_id UUID,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -55,3 +56,13 @@ USING (
         AND emails.user_id = auth.uid()
     )
 );
+
+
+-- Allow users to delete their own emails
+CREATE POLICY "Users can delete their own emails"
+ON public.emails FOR DELETE
+USING (auth.uid() = user_id);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_events_email_type_created ON tracking_events(email_id, event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_emails_user_created ON emails(user_id, created_at DESC);

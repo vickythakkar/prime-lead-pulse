@@ -24,13 +24,12 @@ async function processRetryQueue() {
       if (res.ok) {
         // Success! Remove from queue
         currentQueue.splice(i, 1);
+        await chrome.storage.local.set({ retryQueue: currentQueue });
       }
     } catch (e) {
       // Keep it in the queue for next time
     }
   }
-  
-  await chrome.storage.local.set({ retryQueue: currentQueue });
 }
 
 // ============================================================
@@ -96,7 +95,7 @@ async function fetchWithAuth(url, options, session, apiUrl, senderEmail) {
           
           // ONLY delete the session if the refresh token was actively rejected by Supabase (400, 401, 403).
           // If it's a 5xx error (Vercel cold start timeout) or network error, KEEP the session so it can retry later!
-          if (refreshRes.status >= 400 && refreshRes.status < 500) {
+          if ([400, 401, 403].includes(refreshRes.status)) {
             if (senderEmail) {
               const { sessions } = await chrome.storage.local.get(['sessions']);
               if (sessions && sessions[senderEmail]) {
@@ -189,6 +188,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         sendResponse({ success: res.ok, data });
       } catch (err) {
+        // Queue for retry
+        chrome.storage.local.get(['retryQueue'], async (data) => {
+          const retryQueue = data.retryQueue || [];
+          retryQueue.push(request.payload);
+          await chrome.storage.local.set({ retryQueue });
+        });
+
         let errorMsg = err.message;
         if (errorMsg === "Failed to fetch") {
             errorMsg = "Failed to fetch. If you are stuck on a localhost connection, please refresh the live Vercel dashboard to sync.";
@@ -284,9 +290,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-pollForNotifications(); // Initial cache population
+// Initial cache population is handled by alarms now, no top-level poll.
 
 async function pollForNotifications() {
+  const { lastPoll } = await chrome.storage.local.get('lastPoll');
+  if (lastPoll && Date.now() - lastPoll < 14000) return;
+  await chrome.storage.local.set({ lastPoll: Date.now() });
+
   if (isPolling) return;
   isPolling = true;
 

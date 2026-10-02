@@ -20,7 +20,8 @@
                                                        ]
                                 },
     "host_permissions":  [
-                             "\u003call_urls\u003e"
+                             "*://mail.google.com/*",
+                             "https://prime-lead-pulse.vercel.app/*"
                          ],
     "action":  {
                    "default_popup":  "popup/index.html"
@@ -44,7 +45,7 @@
                         ],
     "externally_connectable":  {
                                    "matches":  [
-                                                   "*://*.vercel.app/*",
+                                                   "https://prime-lead-pulse.vercel.app/*",
                                                    "*://localhost/*"
                                                ]
                                }

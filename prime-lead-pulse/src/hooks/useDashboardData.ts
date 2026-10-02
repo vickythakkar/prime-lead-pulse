@@ -93,23 +93,27 @@ export function useDashboardData() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
 
+    // Debounce fetchData to prevent storms
+    let timeoutId: NodeJS.Timeout;
+    const debouncedFetch = (reason: string) => {
+      console.log(`Realtime update: ${reason}. Debouncing refetch...`);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        fetchData();
+      }, 2000);
+    };
+
     // Set up Realtime subscriptions
     const channel = supabase.channel('dashboard_changes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tracking_events' },
-        () => {
-          console.log('Realtime update: tracking_events changed. Refetching...');
-          fetchData();
-        }
+        () => debouncedFetch('tracking_events changed')
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'emails' },
-        () => {
-          console.log('Realtime update: emails changed. Refetching...');
-          fetchData();
-        }
+        () => debouncedFetch('emails changed')
       )
       .subscribe();
 

@@ -146,6 +146,19 @@ let panelEmailId = null;
 let hasFetchedOnce = false; // Prevents premature "Untracked" badges before first data load
 
 // ------ Helpers ------
+function escapeHtml(str) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/[&<>"']/g, function(m) {
+    return {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;'
+    }[m];
+  });
+}
+
 function formatEventTime(iso) {
   return new Date(iso).toLocaleString('en-US', {
     month: 'short', day: 'numeric',
@@ -388,7 +401,7 @@ function showPanel(record, subject, to, sentDate, isHover = false) {
           <div class="plp-event-text">
             <div class="plp-event-label">${isOpen ? 'Opened email' : 'Clicked link'}</div>
             <div class="plp-event-time">${formatEventTime(ev.created_at)}</div>
-            ${!isOpen && ev.url ? `<div class="plp-event-url">${ev.url}</div>` : ''}
+            ${!isOpen && ev.url ? `<div class="plp-event-url">${escapeHtml(ev.url)}</div>` : ''}
           </div>
         </div>
       `;
@@ -396,12 +409,12 @@ function showPanel(record, subject, to, sentDate, isHover = false) {
 
   panel.innerHTML = `
     <div class="plp-panel-header">
-      <span class="plp-panel-title">${subject || 'Email Details'}</span>
+      <span class="plp-panel-title">${escapeHtml(subject || 'Email Details')}</span>
       <button class="plp-panel-close" id="plp-close-btn">✕</button>
     </div>
     <div class="plp-panel-meta">
-      <div>To: ${to || record.recipient || ''}</div>
-      ${sentDate ? `<div>Sent: ${sentDate}</div>` : ''}
+      <div>To: ${escapeHtml(to || record.recipient || '')}</div>
+      ${sentDate ? `<div>Sent: ${escapeHtml(sentDate)}</div>` : ''}
     </div>
     <div class="plp-panel-stats">
       <div class="plp-stat-box">
@@ -514,7 +527,7 @@ function injectComposeTool(composeWindow) {
           const subjInput = composeWindow.querySelector('input[name="subjectbox"]');
           if (subjInput) subjInput.value = tpl.subject || '';
           const bodyDiv = composeWindow.querySelector('div[contenteditable="true"]');
-          if (bodyDiv) bodyDiv.innerHTML = (tpl.body || '').replace(/\n/g, '<br/>') + '<br/><br/>' + bodyDiv.innerHTML;
+          if (bodyDiv) bodyDiv.innerHTML = escapeHtml(tpl.body || '').replace(/\n/g, '<br/>') + '<br/><br/>' + bodyDiv.innerHTML;
           dropdown.style.display = 'none';
         };
         dropdown.appendChild(item);
@@ -637,7 +650,16 @@ document.addEventListener('click', async (e) => {
   
   // 1. Instantly inject the pixel and rewrite links synchronously
   chrome.storage.local.get(['apiUrl'], ({ apiUrl }) => {
-    const base = (apiUrl || '').replace(/\/$/, '');
+    if (!apiUrl) {
+      console.warn('Prime Lead Pulse: Cannot track email because API URL is not set. Please log in.');
+      // Restore send button state and send without tracking
+      checkbox.checked = false;
+      btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+      delete compose.dataset.plpSending;
+      btn.click();
+      return;
+    }
+    const base = apiUrl.replace(/\/$/, '');
     const body = compose.querySelector('div[aria-label="Message Body"]');
     if (body) {
       const pixel = document.createElement('img');
@@ -646,7 +668,8 @@ document.addEventListener('click', async (e) => {
       body.appendChild(pixel);
 
       body.querySelectorAll('a').forEach(a => {
-        if (a.href.startsWith('mailto:')) return;
+        const skipProtocols = ['mailto:', 'tel:', 'javascript:', '#'];
+        if (skipProtocols.some(p => a.href.startsWith(p)) || !a.href) return;
         if (a.closest('.gmail_signature') || a.closest('.gmail_quote')) return;
         a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(a.href)}`;
       });

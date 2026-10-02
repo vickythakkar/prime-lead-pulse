@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 // 1x1 transparent PNG buffer
-const PIXEL_BUFFER = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
-  'base64'
-);
+const PIXEL_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+const PIXEL_BUFFER = Uint8Array.from(atob(PIXEL_BASE64), c => c.charCodeAt(0));
 
 const PIXEL_HEADERS = {
   'Content-Type': 'image/png',
@@ -16,19 +15,27 @@ const PIXEL_HEADERS = {
   'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
   'Pragma': 'no-cache',
   'Expires': '0',
+  'Access-Control-Allow-Origin': '*',
 };
 
 // Known bot/scanner user-agent patterns (these are NOT real humans opening emails)
-function isLikelyBot(userAgent: string): boolean {
-  // Bare "Mozilla/5.0" with no browser info = corporate security scanner
+function isLikelyBot(userAgent: string, ipAddress: string): boolean {
+  // Bare "Mozilla/5.0" with no browser info = corporate security scanner or proxy
   if (userAgent.trim() === 'Mozilla/5.0') return true;
   const botPatterns = [
     /bot/i, /crawler/i, /spider/i, /slurp/i,
     /barracuda/i, /proofpoint/i, /mimecast/i, /fireeye/i,
     /fortinet/i, /sophos/i, /symantec/i, /mcafee/i,
     /ZmEu/i, /Nmap/i, /sqlmap/i,
+    /GoogleImageProxy/i, // Gmail caching proxy
+    /com\.apple\./i, // Apple Mail Privacy Protection prefetch
   ];
-  return botPatterns.some(p => p.test(userAgent));
+  if (botPatterns.some(p => p.test(userAgent))) return true;
+
+  // Apple Mail Privacy Protection IPs (starts with 17.)
+  if (ipAddress.startsWith('17.')) return true;
+
+  return false;
 }
 
 export async function GET(
@@ -51,8 +58,8 @@ export async function GET(
   const tParam = url.searchParams.get('t');
 
   try {
-    // 1. BOT FILTER: Check user-agent
-    if (isLikelyBot(userAgent)) {
+    // 1. BOT FILTER: Check user-agent and IP
+    if (isLikelyBot(userAgent, ipAddress)) {
       return new NextResponse(PIXEL_BUFFER, { status: 200, headers: PIXEL_HEADERS });
     }
 

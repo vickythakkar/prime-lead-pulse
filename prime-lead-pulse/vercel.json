@@ -4,5 +4,10 @@
       "path": "/api/cron/purge",
       "schedule": "0 0 */3 * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/cron/purge/route.ts": {
+      "maxDuration": 60
+    }
+  }
 }

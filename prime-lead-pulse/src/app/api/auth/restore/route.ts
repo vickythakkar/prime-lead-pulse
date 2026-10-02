@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 export async function POST(request: Request) {
@@ -21,16 +21,24 @@ export async function POST(request: Request) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // 1. Find the old account
-  // Supabase listUsers doesn't have deep filtering, so we fetch and filter in memory.
-  // In a massive app this is slow, but for this it's perfectly fine since we only have a few users.
-  const { data: { users }, error: listError } = await adminClient.auth.admin.listUsers();
-  if (listError) return NextResponse.json({ error: listError.message }, { status: 500 });
+  // 1. Find the old account with pagination
+  let page = 1;
+  let oldUser = null;
+  while (true) {
+    const { data: { users }, error: listError } = await adminClient.auth.admin.listUsers({ page, perPage: 1000 });
+    if (listError) return NextResponse.json({ error: listError.message }, { status: 500 });
+    if (!users || users.length === 0) break;
 
-  const oldUser = users.find(u => 
-    u.user_metadata?.original_email === user.email && 
-    u.user_metadata?.deleted_at
-  );
+    const found = users.find(u => 
+      u.user_metadata?.original_email === user.email && 
+      u.user_metadata?.deleted_at
+    );
+    if (found) {
+      oldUser = found;
+      break;
+    }
+    page++;
+  }
 
   if (!oldUser) {
     return NextResponse.json({ hasBackup: false });
