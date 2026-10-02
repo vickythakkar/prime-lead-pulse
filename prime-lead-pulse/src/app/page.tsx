@@ -11,6 +11,7 @@ export default function Home() {
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const router = useRouter();
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -19,7 +20,16 @@ export default function Home() {
     setError('');
     setSuccessMsg('');
 
-    if (isSignUp) {
+    if (isForgotPassword) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) {
+        setError(error.message);
+      } else {
+        setSuccessMsg('Check your email for the password reset link.');
+      }
+    } else if (isSignUp) {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -67,21 +77,41 @@ export default function Home() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                className={`appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 ${isForgotPassword ? 'rounded-md' : 'rounded-t-md'} focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm`}
                 placeholder="Email address"
               />
             </div>
-            <div>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                placeholder="Password"
-              />
-            </div>
+            {!isForgotPassword && (
+              <div>
+                <input
+                  type="password"
+                  required={!isForgotPassword}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                  placeholder="Password"
+                />
+              </div>
+            )}
           </div>
+
+          {!isForgotPassword && !isSignUp && (
+            <div className="flex items-center justify-end">
+              <div className="text-sm">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsForgotPassword(true);
+                    setError('');
+                    setSuccessMsg('');
+                  }}
+                  className="font-medium text-indigo-600 hover:text-indigo-500 bg-transparent border-none cursor-pointer"
+                >
+                  Forgot your password?
+                </button>
+              </div>
+            </div>
+          )}
 
           {error && <p className="text-red-500 text-sm text-center">{error}</p>}
           {successMsg && <p className="text-green-600 text-sm text-center">{successMsg}</p>}
@@ -92,7 +122,7 @@ export default function Home() {
               disabled={loading}
               className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400"
             >
-              {loading ? 'Processing...' : isSignUp ? 'Sign Up' : 'Sign In'}
+              {loading ? 'Processing...' : isForgotPassword ? 'Send Reset Link' : isSignUp ? 'Sign Up' : 'Sign In'}
             </button>
           </div>
           
@@ -100,13 +130,21 @@ export default function Home() {
             <button
               type="button"
               onClick={() => {
-                setIsSignUp(!isSignUp);
+                if (isForgotPassword) {
+                  setIsForgotPassword(false);
+                } else {
+                  setIsSignUp(!isSignUp);
+                }
                 setError('');
                 setSuccessMsg('');
               }}
               className="text-sm text-indigo-600 hover:text-indigo-500 bg-transparent border-none cursor-pointer"
             >
-              {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
+              {isForgotPassword 
+                ? 'Back to sign in' 
+                : isSignUp 
+                  ? 'Already have an account? Sign in' 
+                  : "Don't have an account? Sign up"}
             </button>
           </div>
         </form>
