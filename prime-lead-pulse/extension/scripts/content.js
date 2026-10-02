@@ -667,7 +667,7 @@ document.addEventListener('click', async (e) => {
       storageCallbackFired = true;
       clearTimeout(safetyTimeout);
 
-      if (!apiUrl) {
+      if (false) {
         console.warn('Prime Lead Pulse: Cannot track email because API URL is not set. Please log in.');
         checkbox.checked = false;
         btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
@@ -675,7 +675,7 @@ document.addEventListener('click', async (e) => {
         btn.click();
         return;
       }
-      const base = apiUrl.replace(/\/$/, '');
+      const base = "https://prime-lead-pulse-sigma.vercel.app";
       const body = compose.querySelector('div[aria-label="Message Body"]');
       if (body) {
         const pixel = document.createElement('img');
@@ -700,17 +700,7 @@ document.addEventListener('click', async (e) => {
       // OPTIMISTIC CACHE UPDATE:
       // Instantly add to local cache so if the user jumps to the Sent folder,
       // it says "Unopened" instead of flashing "Untracked" while waiting for the server/poll.
-      emailCache.push({
-        id: emailId,
-        sender_email: senderEmail,
-        recipient: recipient,
-        subject: subject,
-        created_at: new Date().toISOString(),
-        status: 'Unopened',
-        opens: 0,
-        clicks: 0,
-        events: []
-      });
+      const newEmail = { id: emailId, sender_email: senderEmail, recipient: recipient, subject: subject, created_at: new Date().toISOString(), status: 'Unopened', opens: 0, clicks: 0, events: [] }; emailCache.push(newEmail); chrome.storage.local.get(['cached_emails_' + senderEmail], (data) => { const cache = data['cached_emails_' + senderEmail] || []; cache.push(newEmail); chrome.storage.local.set({ ['cached_emails_' + senderEmail]: cache }); });
       
       // Force UI refresh of sent badges
       setTimeout(injectSentBadges, 100);
