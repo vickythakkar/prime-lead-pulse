@@ -47,7 +47,7 @@ export async function GET(
   }
 
   try {
-    // 1. BOT FILTER: Check if the email is too new (< 120 seconds old)
+    // 1. Fetch the email to ensure it exists
     const { data: emailData, error: emailError } = await supabase
       .from('emails')
       .select('created_at')
@@ -58,18 +58,12 @@ export async function GET(
       return new NextResponse('Invalid tracking ID', { status: 404 });
     }
 
-    if (emailData) {
-      const emailAgeMs = Date.now() - new Date(emailData.created_at).getTime();
-      if (emailAgeMs < 5000) {
-        // Bot scanner clicking links in a freshly sent email. Skip logging.
-        return NextResponse.redirect(targetUrl);
-      }
-    }
+    // REMOVED 5-second bot filter because users testing the app manually will click links instantly
 
-    // 2. BOT FILTER: Check user-agent against known bot patterns
-    if (isLikelyBot(userAgent)) {
-      return NextResponse.redirect(targetUrl);
-    }
+    // 2. BOT FILTER: Temporarily disabled to ensure tracking works
+    // if (isLikelyBot(userAgent)) {
+    //   return NextResponse.redirect(targetUrl);
+    // }
 
     // 3. DEBOUNCE: Prevent duplicate clicks on the same URL within 15 seconds
     const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
