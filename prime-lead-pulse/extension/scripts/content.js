@@ -686,7 +686,7 @@ document.addEventListener('click', async (e) => {
         body.querySelectorAll('a').forEach(a => {
           const skipProtocols = ['mailto:', 'tel:', 'javascript:', '#'];
           if (skipProtocols.some(p => a.href.startsWith(p)) || !a.href) return;
-          if (a.closest('.gmail_quote')) return;
+          
           a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(a.href)}`;
         });
       }
