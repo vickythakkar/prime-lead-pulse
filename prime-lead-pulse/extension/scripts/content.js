@@ -648,50 +648,77 @@ document.addEventListener('click', async (e) => {
   // Generate a UUID locally so we don't have to wait for the Vercel server response
   const emailId = crypto.randomUUID();
   
-  // 1. Instantly inject the pixel and rewrite links synchronously
-  chrome.storage.local.get(['apiUrl'], ({ apiUrl }) => {
-    if (!apiUrl) {
-      console.warn('Prime Lead Pulse: Cannot track email because API URL is not set. Please log in.');
-      // Restore send button state and send without tracking
-      checkbox.checked = false;
-      btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-      delete compose.dataset.plpSending;
-      btn.click();
-      return;
-    }
-    const base = apiUrl.replace(/\/$/, '');
-    const body = compose.querySelector('div[aria-label="Message Body"]');
-    if (body) {
-      const pixel = document.createElement('img');
-      pixel.src = `${base}/api/track/pixel/${emailId}`;
-      pixel.width = 1; pixel.height = 1; pixel.style.display = 'none';
-      body.appendChild(pixel);
-
-      body.querySelectorAll('a').forEach(a => {
-        const skipProtocols = ['mailto:', 'tel:', 'javascript:', '#'];
-        if (skipProtocols.some(p => a.href.startsWith(p)) || !a.href) return;
-        if (a.closest('.gmail_signature') || a.closest('.gmail_quote')) return;
-        a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(a.href)}`;
-      });
-    }
-    
-    // 2. Dispatch the real click to Gmail instantly (UI is completely unblocked)
+  // Safety net: If chrome.storage fails (extension reloaded, context invalidated),
+  // send the email without tracking instead of freezing forever.
+  let storageCallbackFired = false;
+  const safetyTimeout = setTimeout(() => {
+    if (storageCallbackFired) return;
+    storageCallbackFired = true;
+    console.warn('Prime Lead Pulse: Storage callback timed out. Sending email without tracking. Please refresh Gmail.');
     checkbox.checked = false;
     btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
     delete compose.dataset.plpSending;
     btn.click();
+  }, 3000);
 
-    // 3. Fire the tracking call to the backend asynchronously over the wall
-    chrome.runtime.sendMessage({
-      action: 'CREATE_EMAIL',
-      payload: { id: emailId, sender_email: senderEmail, recipient, subject }
-    }, response => {
-      // Do nothing on failure to avoid blocking user flow, just log it.
-      if (!response || !response.success) {
-        console.error("Prime Lead Pulse background tracking failed:", response?.error || response?.data?.error);
+  try {
+    chrome.storage.local.get(['apiUrl'], ({ apiUrl }) => {
+      if (storageCallbackFired) return; // Safety timeout already fired
+      storageCallbackFired = true;
+      clearTimeout(safetyTimeout);
+
+      if (!apiUrl) {
+        console.warn('Prime Lead Pulse: Cannot track email because API URL is not set. Please log in.');
+        checkbox.checked = false;
+        btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+        delete compose.dataset.plpSending;
+        btn.click();
+        return;
       }
+      const base = apiUrl.replace(/\/$/, '');
+      const body = compose.querySelector('div[aria-label="Message Body"]');
+      if (body) {
+        const pixel = document.createElement('img');
+        pixel.src = `${base}/api/track/pixel/${emailId}`;
+        pixel.width = 1; pixel.height = 1; pixel.style.display = 'none';
+        body.appendChild(pixel);
+
+        body.querySelectorAll('a').forEach(a => {
+          const skipProtocols = ['mailto:', 'tel:', 'javascript:', '#'];
+          if (skipProtocols.some(p => a.href.startsWith(p)) || !a.href) return;
+          if (a.closest('.gmail_signature') || a.closest('.gmail_quote')) return;
+          a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(a.href)}`;
+        });
+      }
+      
+      // 2. Dispatch the real click to Gmail instantly (UI is completely unblocked)
+      checkbox.checked = false;
+      btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+      delete compose.dataset.plpSending;
+      btn.click();
+
+      // 3. Fire the tracking call to the backend asynchronously over the wall
+      chrome.runtime.sendMessage({
+        action: 'CREATE_EMAIL',
+        payload: { id: emailId, sender_email: senderEmail, recipient, subject }
+      }, response => {
+        if (!response || !response.success) {
+          console.error("Prime Lead Pulse background tracking failed:", response?.error || response?.data?.error);
+        }
+      });
     });
-  });
+  } catch (e) {
+    // Extension context invalidated — just send the email
+    clearTimeout(safetyTimeout);
+    if (!storageCallbackFired) {
+      storageCallbackFired = true;
+      console.warn('Prime Lead Pulse: Extension context error. Sending without tracking.', e);
+      checkbox.checked = false;
+      btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+      delete compose.dataset.plpSending;
+      btn.click();
+    }
+  }
 }, true);
 
 // ------ Master MutationObserver ------
