@@ -21,7 +21,7 @@
                                 },
     "host_permissions":  [
                              "*://mail.google.com/*",
-                             "https://prime-lead-pulse.vercel.app/*"
+                             "https://prime-lead-pulse-sigma.vercel.app/*"
                          ],
     "action":  {
                    "default_popup":  "popup/index.html"
@@ -45,7 +45,7 @@
                         ],
     "externally_connectable":  {
                                    "matches":  [
-                                                   "https://prime-lead-pulse.vercel.app/*",
+                                                   "https://prime-lead-pulse-sigma.vercel.app/*",
                                                    "*://localhost/*"
                                                ]
                                }

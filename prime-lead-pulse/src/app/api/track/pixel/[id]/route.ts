@@ -27,7 +27,6 @@ function isLikelyBot(userAgent: string, ipAddress: string): boolean {
     /barracuda/i, /proofpoint/i, /mimecast/i, /fireeye/i,
     /fortinet/i, /sophos/i, /symantec/i, /mcafee/i,
     /ZmEu/i, /Nmap/i, /sqlmap/i,
-    /GoogleImageProxy/i, // Gmail caching proxy
     /com\.apple\./i, // Apple Mail Privacy Protection prefetch
   ];
   if (botPatterns.some(p => p.test(userAgent))) return true;
