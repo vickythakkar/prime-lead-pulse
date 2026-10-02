@@ -228,13 +228,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const session = await getSessionForSender(senderEmail);
         const parentEmail = session.user?.email || senderEmail;
         
-        let data = await chrome.storage.local.get(`cached_emails_${parentEmail}`);
-        let cached = data[`cached_emails_${parentEmail}`];
+        let data = await chrome.storage.local.get(`cached_emails_${parentEmail.toLowerCase()}`);
+        let cached = data[`cached_emails_${parentEmail.toLowerCase()}`];
         
         // Fallback just in case
         if (!cached && parentEmail !== senderEmail) {
-          data = await chrome.storage.local.get(`cached_emails_${senderEmail}`);
-          cached = data[`cached_emails_${senderEmail}`];
+          data = await chrome.storage.local.get(`cached_emails_${senderEmail.toLowerCase()}`);
+          cached = data[`cached_emails_${senderEmail.toLowerCase()}`];
         }
         
         sendResponse({ success: true, data: { emails: cached || [] } });
@@ -334,7 +334,7 @@ async function pollForNotifications() {
       
       // Save emails for content.js so it doesn't have to poll the API
       if (currentSession.user?.email) {
-        await chrome.storage.local.set({ [`cached_emails_${currentSession.user.email}`]: emails });
+        await chrome.storage.local.set({ [`cached_emails_${currentSession.user.email.toLowerCase()}`]: emails });
       }
 
       for (const email of emails) {

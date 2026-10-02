@@ -230,7 +230,7 @@ function findEmail(subject, recipientEmailOrArray) {
 let statsError = null;
 
 async function fetchEmailStats() {
-  const senderEmail = getActiveSenderEmail();
+  let senderEmail = getActiveSenderEmail(); if (senderEmail) senderEmail = senderEmail.toLowerCase();
   return new Promise(resolve => {
     chrome.runtime.sendMessage({ action: 'GET_STATS', senderEmail }, response => {
       if (response && response.success) {
@@ -261,14 +261,14 @@ async function fetchEmailStats() {
 
 /// ------ Sent Folder Badge Injection ------
 function injectSentBadges() {
-  // CRITICAL: Don't inject any badges until we have actual data from the server.
-  // Otherwise the MutationObserver stamps "Untracked" on everything before the cache loads.
   if (!hasFetchedOnce) return;
 
   const hash = window.location.hash.toLowerCase();
-  if (hash.includes('#draft') || hash.includes('in%3adraft') || hash.includes('in:draft')) {
-    return; // Don't show tracking badges in drafts view
-  }
+  
+  // ONLY show badges in Sent, All Mail, or Search views. 
+  // Do NOT show in Inbox, Drafts, Spam, Trash, etc.
+  const isValidView = hash.includes('#sent') || hash.includes('#all') || hash.includes('#search');
+  if (!isValidView) return;
 
   const emailRows = document.querySelectorAll('tr.zA');
   if (emailRows.length > 0 && !window.hasLoggedBadgeAttempt) {
@@ -506,7 +506,7 @@ function injectComposeTool(composeWindow) {
     dropdown.innerHTML = '<div style="padding:12px;text-align:center;color:#64748b;font-size:12px;">Loading templates...</div>';
     dropdown.style.display = 'block';
     
-    const senderEmail = getActiveSenderEmail();
+    let senderEmail = getActiveSenderEmail(); if (senderEmail) senderEmail = senderEmail.toLowerCase();
     chrome.runtime.sendMessage({ action: 'GET_TEMPLATES', senderEmail }, response => {
       if (!response || !response.success) {
         dropdown.innerHTML = '<div style="padding:12px;color:#ef4444;font-size:12px;">Error loading templates</div>';
