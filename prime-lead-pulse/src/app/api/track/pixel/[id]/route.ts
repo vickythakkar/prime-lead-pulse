@@ -69,11 +69,11 @@ export async function GET(
       .eq('id', emailId)
       .single();
 
-    // 3. BOT FILTER: Ignore opens within 120 seconds of sending
+    // 3. BOT FILTER: Ignore opens within 5 seconds of sending to avoid immediate proxy scans
     if (emailData) {
       const sendTimeMs = tParam ? parseInt(tParam, 10) : new Date(emailData.created_at).getTime();
       const emailAgeMs = Date.now() - sendTimeMs;
-      if (emailAgeMs < 90000) {
+      if (emailAgeMs < 5000) {
         return new NextResponse(PIXEL_BUFFER, { status: 200, headers: PIXEL_HEADERS });
       }
     }
