@@ -307,6 +307,8 @@ async function pollForNotifications() {
   if (isPolling) return;
   isPolling = true;
 
+  await processRetryQueue();
+
   try {
     const { session, sessions, apiUrl, knownEventIds } = await chrome.storage.local.get(['session', 'sessions', 'apiUrl', 'knownEventIds']);
     if (!apiUrl) return;
