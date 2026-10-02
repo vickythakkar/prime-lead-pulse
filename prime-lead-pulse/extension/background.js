@@ -219,39 +219,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; 
   }
 
+  if (request.action === 'FORCE_POLL') {
+    pollForNotifications();
+    sendResponse({ success: true });
+    return;
+  }
+  
   if (request.action === 'GET_STATS') {
     (async () => {
       try {
-        // Attempt to flush any pending created emails
-        await processRetryQueue().catch(e => console.error("Retry queue flush failed:", e));
         const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
-        if (!apiUrl) throw new Error('API URL not set');
-
         const senderEmail = request.senderEmail;
-        const session = await getSessionForSender(senderEmail);
-
-        const base = apiUrl.replace(/\/$/, '');
-        const res = await fetchWithAuth(`${base}/api/emails`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
-          }
-        }, session, apiUrl, senderEmail);
-
-                let data;
-        const text = await res.text();
-        try {
-          data = JSON.parse(text);
-        } catch (e) {
-          throw new Error(`Server returned non-JSON response (Status: ${res.status}). This usually means the server is down, timed out, or the API URL is incorrect. Response snippet: ${text.substring(0, 100)}...`);
-        }
-        sendResponse({ success: res.ok, data });
+        const { [`cached_emails_${senderEmail}`]: cached } = await chrome.storage.local.get([`cached_emails_${senderEmail}`]);
+        sendResponse({ success: true, data: { emails: cached || [] } });
       } catch (err) {
-        let errorMsg = err.message;
-        if (errorMsg === "Failed to fetch") {
-            errorMsg = "Failed to fetch. If you are stuck on a localhost connection, please refresh the live Vercel dashboard to sync.";
-        }
-        sendResponse({ success: false, error: errorMsg });
+        sendResponse({ success: false, error: err.message });
       }
     })();
     return true;

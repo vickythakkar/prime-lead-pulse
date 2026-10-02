@@ -768,7 +768,15 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
   }
 });
 
-// Initial load
+// Initial load and persistent background polling trigger
+function triggerPoll() {
+  chrome.runtime.sendMessage({ action: 'FORCE_POLL' });
+}
+
+triggerPoll();
+setInterval(triggerPoll, 10000); // Trigger background poll every 10 seconds
+
+// Actually load the UI from local storage
 fetchEmailStats().then(() => {
   injectSentBadges();
   injectEmailViewFeatures();
