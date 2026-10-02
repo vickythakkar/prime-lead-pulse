@@ -230,8 +230,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       try {
         const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
         const senderEmail = request.senderEmail;
-        const { [`cached_emails_${senderEmail}`]: cached } = await chrome.storage.local.get([`cached_emails_${senderEmail}`]);
-        sendResponse({ success: true, data: { emails: cached || [] } });
+        const session = await getSessionForSender(senderEmail);
+        const parentEmail = session.user?.email;
+        
+        const { [`cached_emails_${parentEmail}`]: cached } = await chrome.storage.local.get([`cached_emails_${parentEmail}`]);
+        const filtered = (cached || []).filter(e => e.sender_email === senderEmail);
+        
+        sendResponse({ success: true, data: { emails: filtered } });
       } catch (err) {
         sendResponse({ success: false, error: err.message });
       }
