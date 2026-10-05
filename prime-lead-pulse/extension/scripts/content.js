@@ -702,6 +702,7 @@ document.addEventListener('click', async (e) => {
           while(treeWalker.nextNode()) {
             const node = treeWalker.currentNode;
             if (node.parentNode && node.parentNode.tagName === 'A') continue;
+            if (node.textContent.includes('/api/track/link/')) continue; // Prevent double-wrapping raw tracking links
             if (urlRegex.test(node.textContent)) nodesToReplace.push(node);
           }
           nodesToReplace.forEach(node => {
