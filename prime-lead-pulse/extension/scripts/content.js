@@ -605,8 +605,20 @@ document.addEventListener('keydown', (e) => {
 }, true);
 
 document.addEventListener('click', async (e) => {
-  const isSend = e.target.closest('div[aria-label^="Send"]') ||
-    e.target.closest('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
+  let isSend = e.target.closest('div[aria-label^="Send"]') || e.target.closest('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
+  
+  if (!isSend) {
+    const btn = e.target.closest('[role="button"]');
+    if (btn) {
+      const txt = (btn.innerText || '').trim();
+      const aria = btn.getAttribute('aria-label') || '';
+      const tooltip = btn.getAttribute('data-tooltip') || '';
+      if (txt === 'Send' || txt === 'Send & Archive' || aria.includes('Send') || tooltip.includes('Send')) {
+        isSend = btn;
+      }
+    }
+  }
+
   if (!isSend) return;
 
   const compose = e.target.closest('div[role="dialog"], .M9');
