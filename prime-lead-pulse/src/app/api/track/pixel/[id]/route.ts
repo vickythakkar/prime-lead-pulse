@@ -57,10 +57,10 @@ export async function GET(
   const tParam = url.searchParams.get('t');
 
   try {
-    // 1. BOT FILTER: Check user-agent and IP
-    if (isLikelyBot(userAgent, ipAddress)) {
-      return new NextResponse(PIXEL_BUFFER, { status: 200, headers: PIXEL_HEADERS });
-    }
+    // 1. BOT FILTER: Temporarily removed to allow Apple Mail Privacy Protection (AMPP) and GoogleImageProxy prefetches to log as opens
+    // if (isLikelyBot(userAgent, ipAddress)) {
+    //   return new NextResponse(PIXEL_BUFFER, { status: 200, headers: PIXEL_HEADERS });
+    // }
 
     // 2. Fetch the email to check its creation time
     const { data: emailData } = await supabase
