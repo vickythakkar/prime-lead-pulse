@@ -687,6 +687,20 @@ document.addEventListener('click', async (e) => {
       const base = "https://prime-lead-pulse-sigma.vercel.app";
         const body = compose.querySelector('div[aria-label="Message Body"], div[contenteditable="true"], .Am.Al.editable');
         if (body) {
+          // Prevent data distortion in replies by removing old tracking pixels
+          const oldPixels = body.querySelectorAll('img[src*="/api/track/pixel/"]');
+          oldPixels.forEach(img => img.remove());
+
+          // Prevent double-wrapping of links in quoted text by restoring their original URLs first
+          body.querySelectorAll('a').forEach(a => {
+            if (a.href.includes('/api/track/link/')) {
+              try {
+                const urlParam = new URL(a.href).searchParams.get('url');
+                if (urlParam) a.href = decodeURIComponent(urlParam);
+              } catch (e) {}
+            }
+          });
+
           const pixel = document.createElement('img');
           pixel.src = `${base}/api/track/pixel/${emailId}`;
           pixel.width = 1; pixel.height = 1; pixel.style.display = 'none';
