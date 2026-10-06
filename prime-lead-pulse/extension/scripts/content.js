@@ -265,13 +265,7 @@ function injectSentBadges() {
 
   const hash = window.location.hash.toLowerCase();
   
-  // ONLY show badges in Sent, All Mail, or Search views. 
-  // Do NOT show in Inbox, Drafts, Spam, Trash, etc.
-  const isValidView = hash.includes('#sent') || hash.includes('#all') || hash.includes('#search');
-  if (!isValidView) {
-    document.querySelectorAll('.plp-badge').forEach(el => el.remove());
-    return;
-  }
+  // Allow badges everywhere, but we will filter Untracked badges later
 
   const emailRows = document.querySelectorAll('tr.zA');
   if (emailRows.length > 0 && !window.hasLoggedBadgeAttempt) {
