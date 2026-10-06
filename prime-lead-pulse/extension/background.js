@@ -12,7 +12,7 @@ async function processRetryQueue() {
     const payload = currentQueue[i];
     try {
       const session = await getSessionForSender(payload.sender_email);
-      const res = await fetchWithAuth(`${base}/api/emails`, {
+      const res = await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -170,7 +170,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const session = await getSessionForSender(senderEmail);
 
         const base = apiUrl.replace(/\/$/, '');
-        const res = await fetchWithAuth(`${base}/api/emails`, {
+        const res = await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -324,7 +324,7 @@ async function pollForNotifications() {
 
     // Poll for each session
     for (const currentSession of activeSessions) {
-      const res = await fetchWithAuth(`${base}/api/emails`, {
+      const res = await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
         headers: { 'Authorization': `Bearer ${currentSession.access_token}` }
       }, currentSession, apiUrl, currentSession.user?.email);
       

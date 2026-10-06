@@ -688,7 +688,7 @@ document.addEventListener('click', async (e) => {
         return;
       }
       const base = "https://prime-lead-pulse-sigma.vercel.app";
-        const body = compose.querySelector('div[aria-label="Message Body"]');
+        const body = compose.querySelector('div[aria-label="Message Body"], div[contenteditable="true"], .Am.Al.editable');
         if (body) {
           const pixel = document.createElement('img');
           pixel.src = `${base}/api/track/pixel/${emailId}`;

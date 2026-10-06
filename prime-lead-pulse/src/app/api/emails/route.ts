@@ -99,8 +99,8 @@ export async function GET(request: Request) {
 
     // Process the data to return a clean summary
     const formattedData = data.map((email: any) => {
-      const opens = email.tracking_events.filter((e: any) => e.event_type === 'open');
-      const clicks = email.tracking_events.filter((e: any) => e.event_type === 'click');
+      const opens = (email.tracking_events || []).filter((e: any) => e.event_type === 'open');
+      const clicks = (email.tracking_events || []).filter((e: any) => e.event_type === 'click');
       return {
         ...email,
         stats: {
