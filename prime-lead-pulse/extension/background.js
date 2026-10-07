@@ -382,8 +382,8 @@ async function pollForNotifications() {
       let message;
       if (isMultiple) {
         message = isClick 
-          ? `Someone clicked a link in your email to ${recipient} - "${email.subject}"` 
-          : `Someone opened your email to ${recipient} - "${email.subject}"`;
+          ? `Someone clicked a link in your email with subject "${email.subject}"` 
+          : `Someone opened your email with subject "${email.subject}"`;
       } else {
         message = isClick 
           ? `${recipient} clicked a link in your email - "${email.subject}"` 
@@ -397,13 +397,20 @@ async function pollForNotifications() {
       // This ensures that if 3 pixels fire within 60 seconds of each other across different polling cycles,
       // they simply update the ONE existing notification on the screen rather than stacking 3 popups.
       const timeBucket = Math.floor(Date.now() / 60000);
-      chrome.notifications.create(`${key}_${timeBucket}`, {
+      const notificationId = `${key}_${timeBucket}`;
+      
+      chrome.notifications.create(notificationId, {
         type: 'basic',
         iconUrl: 'icon.gif',
         title,
         message,
-        priority: 2
+        priority: 0
       });
+
+      // Automatically clear the notification after 5 seconds
+      setTimeout(() => {
+        chrome.notifications.clear(notificationId);
+      }, 5000);
     }
 
   } catch (err) {
