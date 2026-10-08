@@ -376,6 +376,16 @@ function removePanel() {
 function showPanel(record, subject, to, sentDate, isHover = false) {
   removePanel();
   if (!record) return;
+
+      const emailCard = dateEl.closest('.adn');
+      if (emailCard) {
+        const senderEl = emailCard.querySelector('.gD');
+        const senderEmail = senderEl ? senderEl.getAttribute('email') : null;
+        const currentEmail = getActiveSenderEmail();
+        if (senderEmail && currentEmail && senderEmail.toLowerCase() !== currentEmail.toLowerCase()) {
+          return;
+        }
+      }
   panelEmailId = record.id;
 
   const panel = document.createElement('div');
@@ -739,7 +749,7 @@ document.addEventListener('click', async (e) => {
       // OPTIMISTIC CACHE UPDATE:
       // Instantly add to local cache so if the user jumps to the Sent folder,
       // it says "Unopened" instead of flashing "Untracked" while waiting for the server/poll.
-      const newEmail = { id: emailId, sender_email: senderEmail, recipient: recipient, subject: subject, created_at: new Date().toISOString(), status: 'Unopened', opens: 0, clicks: 0, events: [] }; emailCache.push(newEmail); chrome.storage.local.get(['cached_emails_' + senderEmail], (data) => { const cache = data['cached_emails_' + senderEmail] || []; cache.push(newEmail); chrome.storage.local.set({ ['cached_emails_' + senderEmail]: cache }); });
+      const newEmail = { id: emailId, sender_email: senderEmail, recipient: recipient, subject: subject, created_at: new Date().toISOString(), status: 'Unopened', opens: 0, clicks: 0, events: [] }; emailCache.push(newEmail); chrome.storage.local.get(['cached_emails_' + senderEmail.toLowerCase()], (data) => { const cache = data['cached_emails_' + senderEmail.toLowerCase()] || []; cache.push(newEmail); chrome.storage.local.set({ ['cached_emails_' + senderEmail.toLowerCase()]: cache }); });
       
       // Force UI refresh of sent badges
       setTimeout(injectSentBadges, 100);
@@ -788,7 +798,7 @@ observer.observe(document.body, { childList: true, subtree: true });
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
     const currentEmail = getActiveSenderEmail();
-    if (currentEmail && changes[`cached_emails_${currentEmail}`]) {
+    if (currentEmail && changes[`cached_emails_${currentEmail.toLowerCase()}`]) {
       fetchEmailStats().then(() => {
         injectSentBadges();
         injectEmailViewFeatures();
