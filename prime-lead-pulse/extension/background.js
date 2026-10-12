@@ -12,7 +12,7 @@ async function processRetryQueue() {
     const payload = currentQueue[i];
     try {
       const session = await getSessionForSender(payload.sender_email);
-      const res = await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
+      const res = await fetchWithAuth(`${base}/api/emails?limit=50&t=${Date.now()}`, { cache: "no-store", 
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -298,9 +298,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-// ------ Notification Polling ------
-// Poll every 15 seconds
-chrome.alarms.create("pollStats", { periodInMinutes: 0.25 });
+// ------ Notification Polling & Idle Detection ------
+// 10-minute idle detection threshold (600 seconds)
+chrome.idle.setDetectionInterval(600);
+
+// When user returns from idle/locked state, immediately trigger a fresh poll
+chrome.idle.onStateChanged.addListener((newState) => {
+  if (newState === 'active') {
+    pollForNotifications();
+  }
+});
+
+// Poll every 30 seconds (0.5 minutes) while active
+chrome.alarms.create("pollStats", { periodInMinutes: 0.5 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "pollStats") {
@@ -308,11 +318,22 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// Initial cache population is handled by alarms now, no top-level poll.
+// Helper to check if user is currently idle or screen is locked
+function checkIsUserIdle() {
+  return new Promise((resolve) => {
+    chrome.idle.queryState(600, (state) => {
+      resolve(state !== 'active');
+    });
+  });
+}
 
 async function pollForNotifications() {
+  // If user has been idle for >= 10 minutes or computer is locked, skip polling to save Vercel compute
+  const isIdle = await checkIsUserIdle();
+  if (isIdle) return;
+
   const { lastPoll } = await chrome.storage.local.get('lastPoll');
-  if (lastPoll && Date.now() - lastPoll < 14000) return;
+  if (lastPoll && Date.now() - lastPoll < 25000) return; // 25s throttle
   await chrome.storage.local.set({ lastPoll: Date.now() });
 
   if (isPolling) return;

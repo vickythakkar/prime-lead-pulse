@@ -803,7 +803,7 @@ function triggerPoll() {
 }
 
 triggerPoll();
-setInterval(triggerPoll, 10000); // Trigger background poll every 10 seconds
+setInterval(triggerPoll, 30000); // Trigger background poll every 30 seconds
 
 // Actually load the UI from local storage
 fetchEmailStats().then(() => {

@@ -71,6 +71,8 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const senderEmail = searchParams.get('sender_email');
+    const limitParam = searchParams.get('limit');
+    const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 50, 1), 200) : 50;
 
     let query = supabase
       .from('emails')
@@ -86,7 +88,7 @@ export async function GET(request: Request) {
         )
       `)
       .order('created_at', { ascending: false })
-      .limit(200);
+      .limit(limit);
 
     // If filtering by a specific sender (for the Gmail extension)
     if (senderEmail) {
