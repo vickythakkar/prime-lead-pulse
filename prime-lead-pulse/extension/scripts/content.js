@@ -716,28 +716,8 @@ document.addEventListener('click', async (e) => {
           pixel.width = 1; pixel.height = 1; pixel.style.display = 'none';
           body.appendChild(pixel);
 
-          // Wrap raw URLs
-          const treeWalker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);
-          const nodesToReplace = [];
-          const urlRegex = /(https?:\/\/[^\s<]+)/g;
-          while(treeWalker.nextNode()) {
-            const node = treeWalker.currentNode;
-            if (node.parentNode && node.parentNode.tagName === 'A') continue;
-            if (node.textContent.includes('/api/track/link/')) continue; // Prevent double-wrapping raw tracking links
-            if (urlRegex.test(node.textContent)) nodesToReplace.push(node);
-          }
-          nodesToReplace.forEach(node => {
-            const span = document.createElement('span');
-            span.innerHTML = node.textContent.replace(urlRegex, '<a href="$1">$1</a>');
-            node.parentNode.replaceChild(span, node);
-          });
+          // Link rewriting disabled: original URLs remain 100% untouched
 
-          body.querySelectorAll('a').forEach(a => {
-          const skipProtocols = ['mailto:', 'tel:', 'javascript:', '#'];
-          if (skipProtocols.some(p => a.href.startsWith(p)) || !a.href) return;
-          
-          a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(a.href)}`;
-        });
       }
       
       // 2. Dispatch the real click to Gmail instantly (UI is completely unblocked)
