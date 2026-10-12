@@ -355,10 +355,12 @@ function injectSentBadges() {
       badge.onclick = (e) => triggerPanel(e, false);
       badge.onmouseenter = (e) => triggerPanel(e, true);
       badge.onmouseleave = (e) => {
-        const panel = document.getElementById('plp-panel');
-        if (panel && panel.dataset.pinned === 'false') {
-          removePanel();
-        }
+        setTimeout(() => {
+          const panel = document.getElementById('plp-panel');
+          if (panel && panel.dataset.pinned === 'false' && !panel.matches(':hover')) {
+            removePanel();
+          }
+        }, 200);
       };
     } catch (err) {
       console.error('Prime Lead Pulse: Error injecting badge for row', err);
@@ -377,15 +379,6 @@ function showPanel(record, subject, to, sentDate, isHover = false) {
   removePanel();
   if (!record) return;
 
-      const emailCard = dateEl.closest('.adn');
-      if (emailCard) {
-        const senderEl = emailCard.querySelector('.gD');
-        const senderEmail = senderEl ? senderEl.getAttribute('email') : null;
-        const currentEmail = getActiveSenderEmail();
-        if (senderEmail && currentEmail && senderEmail.toLowerCase() !== currentEmail.toLowerCase()) {
-          return;
-        }
-      }
   panelEmailId = record.id;
 
   const panel = document.createElement('div');
@@ -440,6 +433,12 @@ function showPanel(record, subject, to, sentDate, isHover = false) {
     <div class="plp-timeline-scroll">${eventsHtml || '<div style="color:#9ca3af;padding:16px 0;text-align:center;">No activity yet</div>'}</div>
   `;
 
+  panel.onmouseleave = () => {
+    if (panel.dataset.pinned === 'false') {
+      removePanel();
+    }
+  };
+
   document.body.appendChild(panel);
   document.getElementById('plp-close-btn').addEventListener('click', removePanel);
 }
@@ -464,6 +463,17 @@ function injectEmailViewFeatures() {
   dateRows.forEach(dateEl => {
     if (dateEl.dataset.plpBtn) return;
     if (!record) return;
+
+    const emailCard = dateEl.closest('.adn');
+    if (emailCard) {
+      const senderEl = emailCard.querySelector('.gD');
+      const senderEmail = senderEl ? senderEl.getAttribute('email') : null;
+      const currentEmail = getActiveSenderEmail();
+      if (senderEmail && currentEmail && senderEmail.toLowerCase() !== currentEmail.toLowerCase()) {
+        return;
+      }
+    }
+
     const total = record.opens + record.clicks;
     const btn = document.createElement('button');
     btn.className = 'plp-view-btn';
