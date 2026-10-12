@@ -190,6 +190,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!res.ok) {
           throw new Error(`API Error: ${data?.error || res.statusText || 'Unknown server error'}`);
         }
+
+        // Immediately update local caches so the email is known right away
+        if (data?.email) {
+          const parentEmail = session.user?.email || senderEmail;
+          const targetAddresses = new Set([parentEmail.toLowerCase()]);
+          if (senderEmail) targetAddresses.add(senderEmail.toLowerCase());
+          for (const addr of targetAddresses) {
+            const key = `cached_emails_${addr}`;
+            const existingData = await chrome.storage.local.get([key]);
+            const list = existingData[key] || [];
+            if (!list.some(e => e.id === data.email.id)) {
+              list.unshift(data.email);
+              await chrome.storage.local.set({ [key]: list });
+            }
+          }
+        }
         
         sendResponse({ success: true, data });
       } catch (err) {
@@ -228,14 +244,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const session = await getSessionForSender(senderEmail);
         const parentEmail = session.user?.email || senderEmail;
         
-        let data = await chrome.storage.local.get(`cached_emails_${parentEmail.toLowerCase()}`);
-        let cached = data[`cached_emails_${parentEmail.toLowerCase()}`];
+        // Prioritize active sender address first, then fallback to parent
+        const keysToGet = [];
+        if (senderEmail) keysToGet.push(`cached_emails_${senderEmail.toLowerCase()}`);
+        if (parentEmail) keysToGet.push(`cached_emails_${parentEmail.toLowerCase()}`);
         
-        // Fallback just in case
-        if (!cached && parentEmail !== senderEmail) {
-          data = await chrome.storage.local.get(`cached_emails_${senderEmail.toLowerCase()}`);
-          cached = data[`cached_emails_${senderEmail.toLowerCase()}`];
-        }
+        const data = await chrome.storage.local.get(keysToGet);
+        const cached = (senderEmail && data[`cached_emails_${senderEmail.toLowerCase()}`]) ||
+                       (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
         
         sendResponse({ success: true, data: { emails: cached || [] } });
       } catch (err) {
@@ -332,10 +348,17 @@ async function pollForNotifications() {
       
       const { emails } = await res.json();
       
-      // Save emails for content.js so it doesn't have to poll the API
-      if (currentSession.user?.email) {
-        await chrome.storage.local.set({ [`cached_emails_${currentSession.user.email.toLowerCase()}`]: emails });
+      // Save emails for content.js across both the account owner and all sending addresses
+      const senders = new Set();
+      if (currentSession.user?.email) senders.add(currentSession.user.email.toLowerCase());
+      emails.forEach(e => {
+        if (e.sender_email) senders.add(e.sender_email.toLowerCase());
+      });
+      const cacheUpdates = {};
+      for (const s of senders) {
+        cacheUpdates[`cached_emails_${s}`] = emails;
       }
+      await chrome.storage.local.set(cacheUpdates);
 
       for (const email of emails) {
         if (!email.tracking_events) continue;
