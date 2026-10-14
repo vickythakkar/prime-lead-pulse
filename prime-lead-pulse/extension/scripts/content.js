@@ -492,16 +492,18 @@ function injectEmailViewFeatures() {
 function injectComposeTool(composeWindow) {
   if (composeWindow.querySelector('.plp-compose-toolbar')) return;
 
-  const sendBtn = composeWindow.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
+  const sendBtn = composeWindow.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3') || composeWindow.querySelector('div[aria-label^="Send"]');
   if (!sendBtn) return; 
 
-  const bottomToolbarWrapper = sendBtn.closest('.gU.Up') || sendBtn.closest('table');
-  if (!bottomToolbarWrapper) return;
+  // Locate the entire bottom toolbar table so we can insert PLP ABOVE it,
+  // without distorting Gmail's internal table layout or displacing the attach button
+  const bottomTable = sendBtn.closest('table') || sendBtn.closest('.btC')?.parentElement || sendBtn.closest('.gU.Up')?.closest('table');
+  if (!bottomTable || !bottomTable.parentElement) return;
 
   // Create a completely separate row (div) for our tools
   const container = document.createElement('div');
   container.className = 'plp-compose-toolbar'; // Used for duplicate detection
-  container.style.cssText = 'display:flex;align-items:center;padding:8px 12px;background:#f8fafc;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;gap:16px;margin-bottom:4px;border-radius:4px;';
+  container.style.cssText = 'display:flex;align-items:center;padding:8px 12px;background:#f8fafc;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;gap:16px;margin-bottom:4px;border-radius:4px;box-sizing:border-box;width:100%;';
 
   // "Use Template" Button
   const tplBtn = document.createElement('div');
@@ -588,7 +590,7 @@ function injectComposeTool(composeWindow) {
   container.appendChild(trackWrapper);
   
   // Insert our new row precisely above the bottom formatting table
-  bottomToolbarWrapper.parentElement.insertBefore(container, bottomToolbarWrapper);
+  bottomTable.parentElement.insertBefore(container, bottomTable);
 }
 
 // ------ Send Interception ------
