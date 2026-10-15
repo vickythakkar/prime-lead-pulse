@@ -10,6 +10,32 @@
   font-weight: 500;
 }
 
+
+.plp-icon-btn {
+  width: 28px !important;
+  height: 28px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 50% !important;
+  cursor: pointer !important;
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 2px !important;
+  transition: background-color 0.15s ease, transform 0.1s ease !important;
+  user-select: none !important;
+  vertical-align: middle !important;
+}
+
+.plp-icon-btn:hover {
+  background-color: rgba(128, 128, 128, 0.25) !important;
+}
+
+.plp-icon-btn:active {
+  transform: scale(0.92) !important;
+}
+
 .plp-badge {
   display: inline-block;
   padding: 2px 8px;

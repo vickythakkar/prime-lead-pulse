@@ -13,6 +13,24 @@ if (!document.getElementById(PRIME_STYLE_ID)) {
   const style = document.createElement('style');
   style.id = PRIME_STYLE_ID;
   style.textContent = `
+    .plp-icon-btn {
+      width: 28px !important;
+      height: 28px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      border-radius: 50% !important;
+      cursor: pointer !important;
+      border: none !important;
+      background: transparent !important;
+      padding: 0 !important;
+      margin: 0 2px !important;
+      transition: background-color 0.15s ease, transform 0.1s ease !important;
+      user-select: none !important;
+      vertical-align: middle !important;
+    }
+    .plp-icon-btn:hover { background-color: rgba(128, 128, 128, 0.25) !important; }
+    .plp-icon-btn:active { transform: scale(0.92) !important; }
     .plp-badge {
       display: inline-flex !important;
       align-items: center !important;
@@ -492,105 +510,104 @@ function injectEmailViewFeatures() {
 function injectComposeTool(composeWindow) {
   if (composeWindow.querySelector('.plp-compose-toolbar')) return;
 
-  const sendBtn = composeWindow.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3') || composeWindow.querySelector('div[aria-label^="Send"]');
-  if (!sendBtn) return; 
+  // Locate the right-side toolbar area containing More options (3 vertical dots) or Discard draft (trash can)
+  const moreBtn = composeWindow.querySelector('div[aria-label*="More options"], div[data-tooltip*="More options"]');
+  const trashBtn = composeWindow.querySelector('div[aria-label*="Discard"], div[aria-label*="discard"], div[data-tooltip*="Discard"], div[data-tooltip*="discard"]');
+  const anchor = moreBtn || trashBtn;
 
-  // Locate the entire bottom toolbar table so we can insert PLP ABOVE it,
-  // without distorting Gmail's internal table layout or displacing the attach button
-  const bottomTable = sendBtn.closest('table') || sendBtn.closest('.btC')?.parentElement || sendBtn.closest('.gU.Up')?.closest('table');
-  if (!bottomTable || !bottomTable.parentElement) return;
+  let targetParent = null;
+  let insertBeforeEl = null;
 
-  // Create a completely separate row (div) for our tools
+  if (anchor) {
+    const anchorWrapper = (anchor.parentElement && anchor.parentElement.tagName !== 'TR' && anchor.parentElement.tagName !== 'TABLE' && anchor.parentElement !== composeWindow) ? anchor.parentElement : anchor;
+    if (anchorWrapper.parentElement) {
+      targetParent = anchorWrapper.parentElement;
+      insertBeforeEl = anchorWrapper;
+    }
+  }
+
+  // Fallback: If anchor not ready, find the bottom table's right cell
+  if (!targetParent) {
+    const sendBtn = composeWindow.querySelector('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3') || composeWindow.querySelector('div[aria-label^="Send"]');
+    if (sendBtn) {
+      const bottomTable = sendBtn.closest('table');
+      const rightCell = bottomTable?.querySelector('tr > td:last-child');
+      if (rightCell) {
+        targetParent = rightCell;
+        insertBeforeEl = rightCell.firstChild;
+      }
+    }
+  }
+
+  if (!targetParent) return; // Wait for compose toolbar to finish rendering
+
+  // Create compact inline container for PLP icon tools
   const container = document.createElement('div');
   container.className = 'plp-compose-toolbar'; // Used for duplicate detection
-  container.style.cssText = 'display:flex;align-items:center;padding:8px 12px;background:#f8fafc;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;gap:16px;margin-bottom:4px;border-radius:4px;box-sizing:border-box;width:100%;';
+  container.style.cssText = 'display:inline-flex;align-items:center;vertical-align:middle;margin-right:8px;gap:4px;user-select:none;';
 
-  // "Use Template" Button
-  const tplBtn = document.createElement('div');
-  tplBtn.style.position = 'relative';
-  tplBtn.innerHTML = `<button type="button" style="display:inline-flex;align-items:center;gap:6px;background:white;border:1px solid #cbd5e1;color:#334155;font-size:12px;font-weight:600;cursor:pointer;padding:6px 12px;border-radius:16px;box-shadow:0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='white'">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
-    Use Template
-  </button>`;
-  
-  const dropdown = document.createElement('div');
-  dropdown.style.cssText = 'display:none;position:absolute;bottom:100%;left:0;margin-bottom:8px;background:white;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);width:250px;max-height:300px;overflow-y:auto;z-index:999;';
-  tplBtn.appendChild(dropdown);
+  // 1. "Track Opens" Icon Toggle
+  const trackBtn = document.createElement('button');
+  trackBtn.type = 'button';
+  trackBtn.className = 'plp-icon-btn';
+  trackBtn.style.cssText = 'width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;border:none;background:transparent;padding:0;margin:0 2px;transition:background-color 0.15s ease;vertical-align:middle;';
+  trackBtn.onmouseenter = () => { trackBtn.style.backgroundColor = 'rgba(128, 128, 128, 0.25)'; };
+  trackBtn.onmouseleave = () => { trackBtn.style.backgroundColor = 'transparent'; };
 
-  tplBtn.querySelector('button').onclick = () => {
-    if (dropdown.style.display === 'block') {
-      dropdown.style.display = 'none';
-      return;
-    }
-    dropdown.innerHTML = '<div style="padding:12px;text-align:center;color:#64748b;font-size:12px;">Loading templates...</div>';
-    dropdown.style.display = 'block';
-    
-    let senderEmail = getActiveSenderEmail(); if (senderEmail) senderEmail = senderEmail.toLowerCase();
-    chrome.runtime.sendMessage({ action: 'GET_TEMPLATES', senderEmail }, response => {
-      if (!response || !response.success) {
-        dropdown.innerHTML = '<div style="padding:12px;color:#ef4444;font-size:12px;">Error loading templates</div>';
-        return;
-      }
-      if (response.data.templates.length === 0) {
-        dropdown.innerHTML = '<div style="padding:12px;text-align:center;color:#64748b;font-size:12px;">No templates found. Create one in the dashboard.</div>';
-        return;
-      }
-      dropdown.innerHTML = '';
-      response.data.templates.forEach(tpl => {
-        const item = document.createElement('div');
-        item.style.cssText = 'padding:10px 12px;border-bottom:1px solid #f1f5f9;cursor:pointer;font-size:13px;color:#0f172a;';
-        item.textContent = tpl.name;
-        item.onmouseover = () => item.style.background = '#f8fafc';
-        item.onmouseout = () => item.style.background = 'white';
-        item.onclick = () => {
-          const subjInput = composeWindow.querySelector('input[name="subjectbox"]');
-          if (subjInput) subjInput.value = tpl.subject || '';
-          const bodyDiv = composeWindow.querySelector('div[contenteditable="true"]');
-          if (bodyDiv) bodyDiv.innerHTML = escapeHtml(tpl.body || '').replace(/\n/g, '<br/>') + '<br/><br/>' + bodyDiv.innerHTML;
-          dropdown.style.display = 'none';
-        };
-        dropdown.appendChild(item);
-      });
-    });
-  };
-
-  document.addEventListener('click', (e) => {
-    if (!tplBtn.contains(e.target)) dropdown.style.display = 'none';
-  });
-
-  // "Best Time" Button
-  const timeBtn = document.createElement('div');
-  timeBtn.innerHTML = `<button type="button" style="display:inline-flex;align-items:center;gap:6px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-size:12px;font-weight:600;cursor:pointer;padding:6px 12px;border-radius:16px;box-shadow:0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#fde68a'" onmouseout="this.style.background='#fef3c7'">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-    Best Time
-  </button>`;
-  timeBtn.onclick = () => window.open('https://prime-lead-pulse.vercel.app/dashboard/calendar', '_blank', 'width=800,height=600');
-
-  // Track Checkbox (styled like a toggle)
-  const trackWrapper = document.createElement('div');
-  trackWrapper.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:#dcfce7;border:1px solid #bbf7d0;padding:6px 12px;border-radius:16px;cursor:pointer;';
   const checkbox = document.createElement('input');
   checkbox.type = 'checkbox';
   checkbox.className = 'prime-track-checkbox';
   checkbox.checked = true;
-  checkbox.id = `plp-chk-${Date.now()}`;
-  checkbox.style.cssText = 'cursor:pointer;accent-color:#16a34a;';
-  const label = document.createElement('label');
-  label.htmlFor = checkbox.id;
-  label.innerHTML = '<span style="color:#16a34a;font-weight:bold;margin-right:4px;">●</span>Track Opens';
-  label.style.cssText = 'font-size:12px;color:#166534;font-weight:600;cursor:pointer;user-select:none;';
-  trackWrapper.onclick = (e) => {
-    if (e.target !== checkbox) checkbox.checked = !checkbox.checked;
-  };
-  trackWrapper.appendChild(checkbox);
-  trackWrapper.appendChild(label);
+  checkbox.style.cssText = 'position:absolute;opacity:0;pointer-events:none;width:0;height:0;margin:0;';
 
-  container.appendChild(tplBtn);
+  function updateTrackState() {
+    if (checkbox.checked) {
+      trackBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3" fill="#16a34a"/></svg>';
+      trackBtn.title = 'Prime Lead Pulse: Email tracking is ON (Click to disable)';
+      trackBtn.setAttribute('aria-label', 'Prime Lead Pulse: Email tracking is ON (Click to disable)');
+      trackBtn.style.opacity = '1';
+    } else {
+      trackBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>';
+      trackBtn.title = 'Prime Lead Pulse: Email tracking is OFF (Click to enable)';
+      trackBtn.setAttribute('aria-label', 'Prime Lead Pulse: Email tracking is OFF (Click to enable)');
+      trackBtn.style.opacity = '0.6';
+    }
+    trackBtn.appendChild(checkbox);
+  }
+
+  trackBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    checkbox.checked = !checkbox.checked;
+    updateTrackState();
+  };
+
+  updateTrackState();
+
+  // 2. "Best Time" Icon Button
+  const timeBtn = document.createElement('button');
+  timeBtn.type = 'button';
+  timeBtn.className = 'plp-icon-btn';
+  timeBtn.title = 'Prime Lead Pulse: Best Time to Send (Open Analytics)';
+  timeBtn.setAttribute('aria-label', 'Prime Lead Pulse: Best Time to Send (Open Analytics)');
+  timeBtn.style.cssText = 'width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;border:none;background:transparent;padding:0;margin:0 2px;transition:background-color 0.15s ease;vertical-align:middle;';
+  timeBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+  timeBtn.onmouseenter = () => { timeBtn.style.backgroundColor = 'rgba(128, 128, 128, 0.25)'; };
+  timeBtn.onmouseleave = () => { timeBtn.style.backgroundColor = 'transparent'; };
+  timeBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    window.open('https://prime-lead-pulse.vercel.app/dashboard/calendar', '_blank', 'width=800,height=600');
+  };
+
+  container.appendChild(trackBtn);
   container.appendChild(timeBtn);
-  container.appendChild(trackWrapper);
-  
-  // Insert our new row precisely above the bottom formatting table
-  bottomTable.parentElement.insertBefore(container, bottomTable);
+
+  if (insertBeforeEl && targetParent.contains(insertBeforeEl)) {
+    targetParent.insertBefore(container, insertBeforeEl);
+  } else {
+    targetParent.appendChild(container);
+  }
 }
 
 // ------ Send Interception ------
