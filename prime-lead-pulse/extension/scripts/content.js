@@ -194,9 +194,92 @@ function getActiveSenderEmail() {
   return titleMatch ? titleMatch[1] : null;
 }
 
-// ARCHITECTURE: Subject is the PRIMARY matching criterion (proven reliable in detail view).
-// Recipient is ONLY used as a tiebreaker when multiple emails share the same subject.
-// When duplicates exist, prefer the record with MORE tracking events (the pixel is linked to ONE record).
+function recipientMatchesThread(eRecipient, participantEmails, participantNames, senderText) {
+  if (!eRecipient) return false;
+  const cleanDbRecip = eRecipient.toLowerCase();
+
+  // 1. Direct email match
+  for (const pEmail of participantEmails) {
+    if (pEmail && (cleanDbRecip.includes(pEmail) || pEmail.includes(cleanDbRecip))) {
+      return true;
+    }
+  }
+
+  // 2. Direct name match (ignore 'me', only names >= 3 chars)
+  for (const pName of participantNames) {
+    if (pName && pName !== 'me' && pName.length >= 3) {
+      if (cleanDbRecip.includes(pName) || pName.includes(cleanDbRecip)) {
+        return true;
+      }
+    }
+  }
+
+  // 3. Sender text match
+  // Extract tokens from dbRecip, e.g. "John Doe <john@gmail.com>" -> "john", "doe"
+  const tokens = cleanDbRecip.replace(/<[^>]+>/g, '').split(/[^a-z0-9]+/i).filter(t => t.length >= 3 && t !== 'com' && t !== 'gmail' && t !== 'yahoo' && t !== 'outlook');
+  for (const tok of tokens) {
+    if (senderText.includes(tok)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function findEmailForThread(subject, participantEmails, participantNames, senderText, isSentView) {
+  if (!subject || emailCache.length === 0) return null;
+
+  const cleanPrefixes = s => (s || '').replace(/^((Re|Fwd|Fw|Aw|Wg|Tr|Rv|Sv|Vs|Vl|Res|Enc):\s*)+/ig, '').trim();
+  const strip = s => cleanPrefixes(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const uiSubj = strip(subject);
+  if (uiSubj.length === 0) return null;
+
+  const subjectMatches = [];
+  for (const e of emailCache) {
+    try {
+      const dbSubj = strip(e.subject);
+      if (dbSubj.length === 0) continue;
+      if (uiSubj === dbSubj) {
+        subjectMatches.push(e);
+      }
+    } catch (_) { /* skip */ }
+  }
+
+  // Fallback for truncated titles (Gmail often truncates long subjects in list view)
+  if (subjectMatches.length === 0 && uiSubj.length >= 12) {
+    for (const e of emailCache) {
+      const dbSubj = strip(e.subject);
+      if (dbSubj.length >= 12 && (uiSubj.startsWith(dbSubj) || dbSubj.startsWith(uiSubj))) {
+        subjectMatches.push(e);
+      }
+    }
+  }
+
+  if (subjectMatches.length === 0) return null;
+
+  // Filter by recipient matching
+  const recipMatches = subjectMatches.filter(e => {
+    return recipientMatchesThread(e.recipient, participantEmails, participantNames, senderText);
+  });
+
+  let candidates = recipMatches;
+  // In Sent view, if recipient extraction was ambiguous, fall back to subject matches
+  if (candidates.length === 0 && isSentView) {
+    candidates = subjectMatches;
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Sort by created_at descending (newest reply/email first)
+  candidates.sort((a, b) => {
+    const dateA = new Date(a.created_at || 0).getTime();
+    const dateB = new Date(b.created_at || 0).getTime();
+    return dateB - dateA;
+  });
+
+  return candidates[0];
+}
+
 function findEmail(subject, recipientEmailOrArray) {
   if (!subject || emailCache.length === 0) return null;
 
@@ -287,16 +370,15 @@ async function fetchEmailStats() {
   });
 }
 
-// ------ Sent Folder Badge Injection ------
+// ------ Sent & Inbox Replied Conversation Badge Injection ------
 function injectSentBadges() {
   if (!hasFetchedOnce) return;
 
   const hash = (window.location.hash || '').toLowerCase();
   const isSentView = hash.startsWith('#sent') || hash.includes('/sent') || hash.includes('label/sent');
+  const isDraftsOrSpamOrTrash = hash.startsWith('#drafts') || hash.startsWith('#spam') || hash.startsWith('#trash');
 
-  // CRITICAL: NEVER show badges in Inbox, Starred, Drafts, etc.
-  // Badges ONLY belong in the Sent Mail folder for emails sent by this user!
-  if (!isSentView) {
+  if (isDraftsOrSpamOrTrash) {
     document.querySelectorAll('tr.zA .plp-badge').forEach(b => b.remove());
     return;
   }
@@ -306,15 +388,41 @@ function injectSentBadges() {
 
   emailRows.forEach(row => {
     try {
-      // Prioritize [email] attribute which contains the raw email address
-      const recipientSpan = row.querySelector('[email]') || row.querySelector('.yP, .zF, span[name]');
-      const recipientEmail = recipientSpan ? (recipientSpan.getAttribute('email') || recipientSpan.textContent || '') : '';
-
       const subjectEl = row.querySelector('span[data-thread-id], span.bqe, .bog, .y6');
       if (!subjectEl) return;
-
       let subject = subjectEl.textContent.trim();
-      const record = findEmail(subject, recipientEmail);
+
+      const senderCell = row.querySelector('.yW');
+      const senderText = (senderCell ? senderCell.textContent : '').toLowerCase();
+
+      // Collect all participant emails and names in this thread row
+      const participantEls = row.querySelectorAll('.yW [email], .yW .yP, .yW .zF, .yW span[name], td.yX [email]');
+      const participantEmails = [];
+      const participantNames = [];
+      participantEls.forEach(el => {
+        const em = el.getAttribute('email');
+        if (em) participantEmails.push(em.toLowerCase().trim());
+        const nm = el.getAttribute('name') || el.textContent;
+        if (nm) participantNames.push(nm.toLowerCase().trim());
+      });
+
+      const currentUser = (getActiveSenderEmail() || '').toLowerCase();
+      // In Inbox / non-sent views: A conversation only belongs to the user if they sent/replied ("me" in participant cell)
+      const hasMe = isSentView || 
+                    /\bme\b/.test(senderText) || 
+                    senderText.startsWith('me,') || 
+                    senderText.includes(', me') || 
+                    (currentUser && participantEmails.includes(currentUser));
+
+      // If the user has NEVER sent/replied in this thread, skip it! No ghost badges on incoming emails.
+      if (!hasMe) {
+        const existingBadge = row.querySelector('.plp-badge');
+        if (existingBadge) existingBadge.remove();
+        return;
+      }
+
+      // Match against sent email cache
+      const record = findEmailForThread(subject, participantEmails, participantNames, senderText, isSentView);
 
       let badge = row.querySelector('.plp-badge');
 
@@ -366,19 +474,19 @@ function injectSentBadges() {
 
       const triggerPanel = (e, isHover) => {
         e.stopPropagation();
-        let to = 'Unknown';
+        let to = record.recipient || 'Unknown';
         const senderEl = row.querySelector('.yW');
         if (senderEl) {
           const clone = senderEl.cloneNode(true);
           const b = clone.querySelector('.plp-badge');
           if (b) b.remove();
-          to = clone.textContent.trim();
+          to = clone.textContent.trim() || record.recipient || 'Unknown';
         }
         
         const dateEl = row.querySelector('.xW.xY span');
         const sentDate = dateEl ? dateEl.getAttribute('title') || dateEl.textContent : '';
         
-        showPanel(record || { recipient: recipientEmail, subject, status: 'Untracked', opens: 0, clicks: 0, events: [] }, subject, to, sentDate, isHover);
+        showPanel(record, subject, to, sentDate, isHover);
       };
 
       badge.style.cursor = 'pointer';
