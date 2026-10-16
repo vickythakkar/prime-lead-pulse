@@ -162,6 +162,20 @@ if (!document.getElementById(PRIME_STYLE_ID)) {
 let emailCache = []; // [{id, subject, recipient, sender_email, opens, clicks, status, events}]
 let panelEmailId = null;
 let hasFetchedOnce = false; // Prevents premature "Untracked" badges before first data load
+let knownUserEmails = new Set();
+
+function updateKnownUserEmails() {
+  chrome.storage.local.get(['session', 'sessions'], data => {
+    if (data.session?.user?.email) knownUserEmails.add(data.session.user.email.toLowerCase());
+    if (data.sessions) {
+      Object.keys(data.sessions).forEach(em => knownUserEmails.add(em.toLowerCase()));
+      Object.values(data.sessions).forEach(s => {
+        if (s.user?.email) knownUserEmails.add(s.user.email.toLowerCase());
+      });
+    }
+  });
+}
+updateKnownUserEmails();
 
 // ------ Helpers ------
 function escapeHtml(str) {
@@ -407,12 +421,17 @@ function injectSentBadges() {
       });
 
       const currentUser = (getActiveSenderEmail() || '').toLowerCase();
-      // In Inbox / non-sent views: A conversation only belongs to the user if they sent/replied ("me" in participant cell)
+      if (currentUser) knownUserEmails.add(currentUser);
+
+      const isCurrentUserParticipant = (currentUser && participantEmails.includes(currentUser)) ||
+                                       participantEmails.some(em => knownUserEmails.has(em));
+
+      // In Inbox / non-sent views: A conversation only belongs to the user if they sent/replied ("me" in participant cell or matches user accounts)
       const hasMe = isSentView || 
                     /\bme\b/.test(senderText) || 
                     senderText.startsWith('me,') || 
                     senderText.includes(', me') || 
-                    (currentUser && participantEmails.includes(currentUser));
+                    isCurrentUserParticipant;
 
       // If the user has NEVER sent/replied in this thread, skip it! No ghost badges on incoming emails.
       if (!hasMe) {
@@ -425,14 +444,6 @@ function injectSentBadges() {
       const record = findEmailForThread(subject, participantEmails, participantNames, senderText, isSentView);
 
       let badge = row.querySelector('.plp-badge');
-
-      // If this email was not tracked or not found in our database, do NOT show any badge.
-      // Keep Gmail native, clean, and professional.
-      if (!record) {
-        if (badge) badge.remove();
-        return;
-      }
-
       const isNew = !badge;
 
       if (!badge) {
@@ -442,7 +453,11 @@ function injectSentBadges() {
       
       badge.className = 'plp-badge';
   
-      if (record.clicks > 0) {
+      if (!record) {
+        badge.className += ' plp-badge-untracked';
+        badge.textContent = 'Untracked';
+        badge.title = 'This conversation was sent without tracking';
+      } else if (record.clicks > 0) {
         badge.className += ' plp-badge-clicked';
         badge.textContent = `Clicked ${record.clicks}x`;
         const clickedUrls = [...new Set((record.events || []).filter(e => e.event_type === 'click' && e.url).map(e => e.url))];
@@ -474,19 +489,19 @@ function injectSentBadges() {
 
       const triggerPanel = (e, isHover) => {
         e.stopPropagation();
-        let to = record.recipient || 'Unknown';
+        let to = record ? record.recipient : (participantNames[0] || 'Unknown');
         const senderEl = row.querySelector('.yW');
         if (senderEl) {
           const clone = senderEl.cloneNode(true);
           const b = clone.querySelector('.plp-badge');
           if (b) b.remove();
-          to = clone.textContent.trim() || record.recipient || 'Unknown';
+          to = clone.textContent.trim() || to;
         }
         
         const dateEl = row.querySelector('.xW.xY span');
         const sentDate = dateEl ? dateEl.getAttribute('title') || dateEl.textContent : '';
         
-        showPanel(record, subject, to, sentDate, isHover);
+        showPanel(record || { recipient: to, subject, status: 'Untracked', opens: 0, clicks: 0, events: [] }, subject, to, sentDate, isHover);
       };
 
       badge.style.cursor = 'pointer';
@@ -938,6 +953,9 @@ observer.observe(document.body, { childList: true, subtree: true });
 // ------ Storage Listener (No Polling) ------
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
+    if (changes.session || changes.sessions) {
+      updateKnownUserEmails();
+    }
     const currentEmail = getActiveSenderEmail();
     if (changes.session || changes.sessions || (currentEmail && changes[`cached_emails_${currentEmail.toLowerCase()}`])) {
       statsError = null;
