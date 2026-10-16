@@ -210,14 +210,25 @@ function findEmail(subject, recipientEmailOrArray) {
     try {
       const dbSubj = strip(e.subject);
       if (dbSubj.length === 0) continue;
-      if (uiSubj.includes(dbSubj) || dbSubj.includes(uiSubj)) {
+      // Exact normalized match
+      if (uiSubj === dbSubj) {
         subjectMatches.push(e);
       }
     } catch (_) { /* skip */ }
   }
 
+  // Fallback for truncated titles (Gmail often truncates long subjects in list view)
+  if (subjectMatches.length === 0 && uiSubj.length >= 12) {
+    for (const e of emailCache) {
+      const dbSubj = strip(e.subject);
+      if (dbSubj.length >= 12 && (uiSubj.startsWith(dbSubj) || dbSubj.startsWith(uiSubj))) {
+        subjectMatches.push(e);
+      }
+    }
+  }
+
   if (subjectMatches.length === 0) return null;
-  if (subjectMatches.length === 1) return subjectMatches[0];
+  if (subjectMatches.length === 1 && !recipientEmailOrArray) return subjectMatches[0];
 
   let candidates = subjectMatches;
   if (recipientEmailOrArray) {
@@ -233,8 +244,7 @@ function findEmail(subject, recipientEmailOrArray) {
     }
   }
 
-  // Sort by created_at descending (newest email first) rather than activity.
-  // Activity sorting causes OLD emails with opens to hijack NEW emails without opens!
+  // Sort by created_at descending (newest email first)
   candidates.sort((a, b) => {
     const dateA = new Date(a.created_at || 0).getTime();
     const dateB = new Date(b.created_at || 0).getTime();
@@ -277,26 +287,28 @@ async function fetchEmailStats() {
   });
 }
 
-/// ------ Sent Folder Badge Injection ------
+// ------ Sent Folder Badge Injection ------
 function injectSentBadges() {
   if (!hasFetchedOnce) return;
 
-  const hash = window.location.hash.toLowerCase();
-  
-  // Allow badges everywhere, but we will filter Untracked badges later
+  const hash = (window.location.hash || '').toLowerCase();
+  const isSentView = hash.startsWith('#sent') || hash.includes('/sent') || hash.includes('label/sent');
+
+  // CRITICAL: NEVER show badges in Inbox, Starred, Drafts, etc.
+  // Badges ONLY belong in the Sent Mail folder for emails sent by this user!
+  if (!isSentView) {
+    document.querySelectorAll('tr.zA .plp-badge').forEach(b => b.remove());
+    return;
+  }
 
   const emailRows = document.querySelectorAll('tr.zA');
-  if (emailRows.length > 0 && !window.hasLoggedBadgeAttempt) {
-    console.log(`Prime Lead Pulse: Found ${emailRows.length} email rows, cache has ${emailCache.length} tracked emails.`);
-    window.hasLoggedBadgeAttempt = true;
-  }
+  if (emailRows.length === 0) return;
 
   emailRows.forEach(row => {
     try {
       // Prioritize [email] attribute which contains the raw email address
       const recipientSpan = row.querySelector('[email]') || row.querySelector('.yP, .zF, span[name]');
-      if (!recipientSpan) return;
-      const recipientEmail = recipientSpan.getAttribute('email') || recipientSpan.textContent || '';
+      const recipientEmail = recipientSpan ? (recipientSpan.getAttribute('email') || recipientSpan.textContent || '') : '';
 
       const subjectEl = row.querySelector('span[data-thread-id], span.bqe, .bog, .y6');
       if (!subjectEl) return;
@@ -305,6 +317,14 @@ function injectSentBadges() {
       const record = findEmail(subject, recipientEmail);
 
       let badge = row.querySelector('.plp-badge');
+
+      // If this email was not tracked or not found in our database, do NOT show any badge.
+      // Keep Gmail native, clean, and professional.
+      if (!record) {
+        if (badge) badge.remove();
+        return;
+      }
+
       const isNew = !badge;
 
       if (!badge) {
@@ -314,15 +334,7 @@ function injectSentBadges() {
       
       badge.className = 'plp-badge';
   
-      if (statsError) {
-        badge.className += ' plp-badge-untracked';
-        badge.textContent = 'Auth Error';
-        badge.title = statsError;
-      } else if (!record) {
-        badge.className += ' plp-badge-untracked';
-        badge.textContent = 'Untracked';
-        badge.title = '';
-      } else if (record.clicks > 0) {
+      if (record.clicks > 0) {
         badge.className += ' plp-badge-clicked';
         badge.textContent = `Clicked ${record.clicks}x`;
         const clickedUrls = [...new Set((record.events || []).filter(e => e.event_type === 'click' && e.url).map(e => e.url))];
@@ -334,7 +346,7 @@ function injectSentBadges() {
       } else {
         badge.className += ' plp-badge-unopened';
         badge.textContent = 'Unopened';
-        badge.title = '';
+        badge.title = 'Recipient has not opened this email yet';
       }
   
       if (isNew) {
@@ -561,7 +573,12 @@ function injectComposeTool(composeWindow) {
   checkbox.style.cssText = 'position:absolute;opacity:0;pointer-events:none;width:0;height:0;margin:0;';
 
   function updateTrackState() {
-    if (checkbox.checked) {
+    if (statsError) {
+      trackBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><line x1="1" y1="1" x2="23" y2="23"/><circle cx="12" cy="12" r="3" fill="#f59e0b"/></svg>';
+      trackBtn.title = 'Prime Lead Pulse: Click to sign in and activate tracking';
+      trackBtn.setAttribute('aria-label', 'Prime Lead Pulse: Click to sign in and activate tracking');
+      trackBtn.style.opacity = '1';
+    } else if (checkbox.checked) {
       trackBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3" fill="#16a34a"/></svg>';
       trackBtn.title = 'Prime Lead Pulse: Email tracking is ON (Click to disable)';
       trackBtn.setAttribute('aria-label', 'Prime Lead Pulse: Email tracking is ON (Click to disable)');
@@ -578,6 +595,10 @@ function injectComposeTool(composeWindow) {
   trackBtn.onclick = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (statsError) {
+      window.open('https://prime-lead-pulse-sigma.vercel.app', '_blank', 'width=800,height=600');
+      return;
+    }
     checkbox.checked = !checkbox.checked;
     updateTrackState();
   };
@@ -597,7 +618,7 @@ function injectComposeTool(composeWindow) {
   timeBtn.onclick = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    window.open('https://prime-lead-pulse.vercel.app/dashboard/calendar', '_blank', 'width=800,height=600');
+    window.open('https://prime-lead-pulse-sigma.vercel.app/dashboard/calendar', '_blank', 'width=800,height=600');
   };
 
   container.appendChild(trackBtn);
@@ -742,7 +763,10 @@ document.addEventListener('click', async (e) => {
 
           const pixel = document.createElement('img');
           pixel.src = `${base}/api/track/pixel/${emailId}`;
-          pixel.width = 1; pixel.height = 1; pixel.style.display = 'none';
+          pixel.setAttribute('width', '1');
+          pixel.setAttribute('height', '1');
+          pixel.setAttribute('alt', '');
+          pixel.style.cssText = 'width:1px!important;height:1px!important;min-width:1px!important;min-height:1px!important;opacity:0!important;border:none!important;margin:0!important;padding:0!important;position:absolute;left:-9999px;';
           body.appendChild(pixel);
 
           // Link rewriting disabled: original URLs remain 100% untouched
@@ -807,10 +831,16 @@ observer.observe(document.body, { childList: true, subtree: true });
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
     const currentEmail = getActiveSenderEmail();
-    if (currentEmail && changes[`cached_emails_${currentEmail.toLowerCase()}`]) {
+    if (changes.session || changes.sessions || (currentEmail && changes[`cached_emails_${currentEmail.toLowerCase()}`])) {
+      statsError = null;
       fetchEmailStats().then(() => {
         injectSentBadges();
         injectEmailViewFeatures();
+        document.querySelectorAll('div[role="dialog"], .M9').forEach(w => {
+          const oldToolbar = w.querySelector('.plp-compose-toolbar');
+          if (oldToolbar) oldToolbar.remove();
+          injectComposeTool(w);
+        });
       });
     }
   }

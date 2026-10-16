@@ -12,7 +12,7 @@ const PIXEL_BUFFER = Uint8Array.from(atob(PIXEL_BASE64), c => c.charCodeAt(0));
 const PIXEL_HEADERS = {
   'Content-Type': 'image/png',
   'Content-Length': PIXEL_BUFFER.length.toString(),
-  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
   'Pragma': 'no-cache',
   'Expires': '0',
   'Access-Control-Allow-Origin': '*',
@@ -63,32 +63,44 @@ export async function GET(
     // }
 
     // 2. Fetch the email to check its creation time
-    const { data: emailData } = await supabase
+    let { data: emailData } = await supabase
       .from('emails')
       .select('created_at')
       .eq('id', emailId)
       .single();
 
-    // REMOVED 5-second check here because GoogleImageProxy prefetches the image instantly upon delivery,
-    // and if we ignore it, Google caches the un-tracked image forever, preventing any future opens from tracking.
-    
-    // 3. DEBOUNCE: Prevent duplicate opens within 15 seconds (was 5s, too short)
-    const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
-    const { data: recentOpens } = await supabase
-      .from('tracking_events')
-      .select('id')
-      .eq('email_id', emailId)
-      .eq('event_type', 'open')
-      .gte('created_at', fifteenSecondsAgo)
-      .limit(1);
+    // If email record is not found yet (handles race condition between client send and recipient open)
+    if (!emailData) {
+      await new Promise(r => setTimeout(r, 1500));
+      const { data: retryData } = await supabase
+        .from('emails')
+        .select('created_at')
+        .eq('id', emailId)
+        .single();
+      emailData = retryData;
+    }
 
-    if (!recentOpens || recentOpens.length === 0) {
-      await supabase.from('tracking_events').insert({
-        email_id: emailId,
-        event_type: 'open',
-        ip_address: ipAddress,
-        user_agent: userAgent,
-      });
+    if (emailData) {
+      // 3. DEBOUNCE: Prevent duplicate opens within 15 seconds
+      const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
+      const { data: recentOpens } = await supabase
+        .from('tracking_events')
+        .select('id')
+        .eq('email_id', emailId)
+        .eq('event_type', 'open')
+        .gte('created_at', fifteenSecondsAgo)
+        .limit(1);
+
+      if (!recentOpens || recentOpens.length === 0) {
+        await supabase.from('tracking_events').insert({
+          email_id: emailId,
+          event_type: 'open',
+          ip_address: ipAddress,
+          user_agent: userAgent,
+        });
+      }
+    } else {
+      console.warn(`[Track Pixel] Email ID ${emailId} not found in database. Skipping tracking event.`);
     }
   } catch (error) {
     console.error('Error logging pixel open:', error);

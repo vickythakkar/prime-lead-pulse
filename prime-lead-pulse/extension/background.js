@@ -1,9 +1,12 @@
 
+const DEFAULT_API_URL = 'https://prime-lead-pulse-sigma.vercel.app';
+
 async function processRetryQueue() {
   const { retryQueue, apiUrl } = await chrome.storage.local.get(['retryQueue', 'apiUrl']);
-  if (!retryQueue || retryQueue.length === 0 || !apiUrl) return;
+  const activeApiUrl = apiUrl || DEFAULT_API_URL;
+  if (!retryQueue || retryQueue.length === 0) return;
   
-  const base = apiUrl.replace(/\/$/, '');
+  const base = activeApiUrl.replace(/\/$/, '');
   
   // Create a copy of the queue so we can mutate it
   let currentQueue = [...retryQueue];
@@ -130,24 +133,33 @@ async function fetchWithAuth(url, options, session, apiUrl, senderEmail) {
 
 async function getSessionForSender(senderEmail) {
   const { session, sessions } = await chrome.storage.local.get(['session', 'sessions']);
-  if (sessions && sessions[senderEmail]) return sessions[senderEmail];
-  if (session && session.user && session.user.email === senderEmail) return session;
+  const cleanSender = (senderEmail || '').toLowerCase();
+  if (sessions && cleanSender && sessions[cleanSender]) return sessions[cleanSender];
+  if (session && session.user && cleanSender && session.user.email?.toLowerCase() === cleanSender) return session;
   if (session) return session; // Fallback: allow tracking into the active PLP dashboard
+  if (sessions && Object.keys(sessions).length > 0) {
+    return Object.values(sessions)[0];
+  }
   throw new Error(`Please open the Prime Lead Pulse dashboard and log in to link this account.`);
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'DASHBOARD_LOGIN') {
     const plpEmail = request.session?.user?.email;
+    const apiUrl = request.apiUrl || DEFAULT_API_URL;
     if (plpEmail) {
       chrome.storage.local.get(['sessions'], (data) => {
         const sessions = data.sessions || {};
-        sessions[plpEmail] = request.session;
-        chrome.storage.local.set({ sessions, apiUrl: request.apiUrl });
+        sessions[plpEmail.toLowerCase()] = request.session;
+        chrome.storage.local.set({ sessions, apiUrl, session: request.session, lastPoll: 0 }, () => {
+          pollForNotifications();
+        });
+      });
+    } else {
+      chrome.storage.local.set({ session: request.session, apiUrl, lastPoll: 0 }, () => {
+        pollForNotifications();
       });
     }
-    // Also save legacy session
-    chrome.storage.local.set({ session: request.session, apiUrl: request.apiUrl });
     sendResponse({ success: true });
     return;
   }
@@ -164,12 +176,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
       try {
         const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
-        if (!apiUrl) throw new Error('API URL not set');
+        const activeApiUrl = apiUrl || DEFAULT_API_URL;
         
         const senderEmail = request.payload.sender_email;
         const session = await getSessionForSender(senderEmail);
 
-        const base = apiUrl.replace(/\/$/, '');
+        const base = activeApiUrl.replace(/\/$/, '');
         const res = await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
           method: 'POST',
           headers: {
@@ -177,7 +189,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             'Authorization': `Bearer ${session.access_token}`
           },
           body: JSON.stringify(request.payload)
-        }, session, apiUrl, senderEmail);
+        }, session, activeApiUrl, senderEmail);
 
                 let data;
         const text = await res.text();
@@ -265,18 +277,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     (async () => {
       try {
         const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
-        if (!apiUrl) throw new Error('API URL not set');
+        const activeApiUrl = apiUrl || DEFAULT_API_URL;
 
         const senderEmail = request.senderEmail;
         const session = await getSessionForSender(senderEmail);
 
-        const base = apiUrl.replace(/\/$/, '');
+        const base = activeApiUrl.replace(/\/$/, '');
         const res = await fetchWithAuth(`${base}/api/templates`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${session.access_token}`
           }
-        }, session, apiUrl, senderEmail);
+        }, session, activeApiUrl, senderEmail);
 
                 let data;
         const text = await res.text();
@@ -343,7 +355,7 @@ async function pollForNotifications() {
 
   try {
     const { session, sessions, apiUrl, knownEventIds } = await chrome.storage.local.get(['session', 'sessions', 'apiUrl', 'knownEventIds']);
-    if (!apiUrl) return;
+    const activeApiUrl = apiUrl || DEFAULT_API_URL;
 
     // Build array of all active sessions
     const activeSessions = [];
@@ -355,7 +367,7 @@ async function pollForNotifications() {
     
     if (activeSessions.length === 0) return;
 
-    const base = apiUrl.replace(/\/$/, '');
+    const base = activeApiUrl.replace(/\/$/, '');
     const currentKnownIds = new Set(knownEventIds || []);
     const newEventsToNotify = [];
 

@@ -48,6 +48,14 @@ export function useDashboardData() {
 
     setUser(session.user);
 
+    if (typeof window !== 'undefined' && session) {
+      window.postMessage({
+        type: 'PLP_DASHBOARD_AUTH',
+        session: session,
+        apiUrl: window.location.origin
+      }, '*');
+    }
+
     try {
       const response = await fetch('/api/emails', {
         headers: { Authorization: `Bearer ${session.access_token}` }
@@ -123,6 +131,9 @@ export function useDashboardData() {
   }, []);
 
   const logout = async () => {
+    if (typeof window !== 'undefined') {
+      window.postMessage({ type: 'PLP_DASHBOARD_AUTH', action: 'LOGOUT' }, '*');
+    }
     await supabase.auth.signOut();
     router.push('/');
   };

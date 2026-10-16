@@ -73,6 +73,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     errorMsg.textContent = '';
   });
 
+  const openDashboardBtn = document.getElementById('openDashboardBtn');
+  if (openDashboardBtn) {
+    openDashboardBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://prime-lead-pulse-sigma.vercel.app/dashboard' });
+    });
+  }
+
+  const loginViaWebBtn = document.getElementById('loginViaWebBtn');
+  if (loginViaWebBtn) {
+    loginViaWebBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://prime-lead-pulse-sigma.vercel.app' });
+    });
+  }
+
   async function removeAccount(emailToRemove) {
     const { session, sessions } = await chrome.storage.local.get(['session', 'sessions']);
     

@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Prime Lead Pulse",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Track email opens and clicks directly inside Gmail.",
     "permissions": [
         "storage",
@@ -22,7 +22,8 @@
     },
     "host_permissions": [
         "*://mail.google.com/*",
-        "https://prime-lead-pulse-sigma.vercel.app/*"
+        "https://prime-lead-pulse-sigma.vercel.app/*",
+        "http://localhost:3000/*"
     ],
     "action": {
         "default_popup": "popup/index.html"
@@ -40,6 +41,16 @@
             ],
             "css": [
                 "scripts/content.css"
+            ],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": [
+                "https://prime-lead-pulse-sigma.vercel.app/*",
+                "http://localhost:3000/*"
+            ],
+            "js": [
+                "scripts/dashboard-sync.js"
             ],
             "run_at": "document_idle"
         }

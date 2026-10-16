@@ -38,13 +38,16 @@ export default function Home() {
       if (error) {
         setError(error.message);
       } else if (data.session) {
+        if (typeof window !== 'undefined') {
+          window.postMessage({ type: 'PLP_DASHBOARD_AUTH', session: data.session, apiUrl: window.location.origin }, '*');
+        }
         router.push('/dashboard');
       } else {
         setSuccessMsg('Check your email to confirm your account before signing in.');
         setIsSignUp(false);
       }
     } else {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
@@ -52,6 +55,9 @@ export default function Home() {
       if (error) {
         setError(error.message);
       } else {
+        if (typeof window !== 'undefined' && data?.session) {
+          window.postMessage({ type: 'PLP_DASHBOARD_AUTH', session: data.session, apiUrl: window.location.origin }, '*');
+        }
         router.push('/dashboard');
       }
     }
