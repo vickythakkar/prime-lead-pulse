@@ -298,6 +298,81 @@ function closeConversationWindow(convoEl) {
   }
 }
 
+/**
+ * Type text into a React-controlled contenteditable div.
+ * LinkedIn's message box is a React component. The only reliable way to
+ * set text AND have React recognize it (so it enables the Send button) is
+ * to simulate a clipboard paste event, which React's synthetic event system
+ * processes correctly. execCommand / innerHTML / innerText all fail silently.
+ */
+async function typeIntoReactInput(element, text) {
+  if (!element) return false;
+
+  try {
+    element.focus();
+    await sleep(200);
+
+    // Clear existing content first
+    element.innerHTML = '';
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(150);
+
+    // Method 1: Clipboard paste simulation (most reliable for React)
+    const clipboardData = new DataTransfer();
+    clipboardData.setData('text/plain', text);
+
+    const pasteEvent = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: clipboardData
+    });
+
+    element.dispatchEvent(pasteEvent);
+    await sleep(300);
+
+    // Verify text was inserted
+    if (element.textContent && element.textContent.trim().length > 0) {
+      return true;
+    }
+
+    // Method 2: execCommand insertText (works in some environments)
+    element.focus();
+    const inserted = document.execCommand('insertText', false, text);
+    await sleep(200);
+
+    if (element.textContent && element.textContent.trim().length > 0) {
+      return true;
+    }
+
+    // Method 3: Direct innerHTML + React fiber trick
+    element.innerHTML = `<p>${text}</p>`;
+
+    // Find and trigger React's internal onChange via the fiber
+    const reactFiberKey = Object.keys(element).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+    if (reactFiberKey) {
+      let fiber = element[reactFiberKey];
+      while (fiber) {
+        const onChange = fiber.pendingProps?.onChange || fiber.memoizedProps?.onChange;
+        if (onChange) {
+          onChange({ target: element, currentTarget: element, bubbles: true });
+          break;
+        }
+        fiber = fiber.return;
+      }
+    }
+
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(300);
+
+    return element.textContent && element.textContent.trim().length > 0;
+
+  } catch (err) {
+    console.error('typeIntoReactInput error:', err);
+    return false;
+  }
+}
+
 // Main Automation Sequence
 async function runAutoWelcomeSequence() {
   if (isRunning) return;
@@ -461,38 +536,37 @@ async function runAutoWelcomeSequence() {
 
       updateHud(`Drafting message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
 
-      // Focus and enter text
+      // Focus the textbox
       textBox.focus();
       await sleep(400);
 
-      document.execCommand('selectAll', false, null);
-      document.execCommand('insertText', false, personalizedMessage);
-
-      // Fallback
-      if (!textBox.textContent || !textBox.textContent.includes(firstName)) {
-        textBox.innerHTML = `<p>${personalizedMessage}</p>`;
+      // --- REACT-COMPATIBLE TEXT INJECTION ---
+      // LinkedIn uses React which ignores execCommand. The only reliable method
+      // that triggers React's synthetic event system is a clipboard paste event.
+      const typed = await typeIntoReactInput(textBox, personalizedMessage);
+      if (!typed) {
+        console.warn('Could not type message for', conn.name);
+        closeConversationWindow(activeConvo);
+        continue;
       }
 
-      textBox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: personalizedMessage }));
-      textBox.dispatchEvent(new Event('input', { bubbles: true }));
-      textBox.dispatchEvent(new Event('change', { bubbles: true }));
-
-      await sleep(1500);
+      await sleep(1200);
 
       if (shouldStop) {
         closeConversationWindow(activeConvo);
         break;
       }
 
-      // Find send button and wait for it to become enabled
+      // Find send button and wait for it to become enabled (up to 5 seconds)
       let sendBtn = null;
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 20; i++) {
         sendBtn = activeConvo.querySelector(
-          'button.msg-form__send-button, button[type="submit"].msg-form__send-btn, button[type="submit"], button.msg-form__send-btn'
+          'button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[type="submit"]'
         );
         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
           break;
         }
+        sendBtn = null;
         await sleep(250);
       }
 
