@@ -213,14 +213,21 @@ function getConnectionCards() {
 
     // Extract name
     let name = '';
-    const titleEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title, span[aria-hidden="true"], h3, strong');
-    if (titleEl && titleEl.textContent.trim()) {
-      name = titleEl.textContent.trim();
+    const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], h3, strong');
+    if (nameEl) {
+      name = nameEl.innerText || nameEl.textContent || '';
     } else {
-      name = link.textContent.trim();
+      name = link.innerText || link.textContent || '';
     }
 
+    // Clean name: take first line, separate joined lowercase-uppercase words (e.g. MyersRealtor -> Myers Realtor)
     name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
+    name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
+    const nameWords = name.split(' ').filter(w => w.length > 0);
+    if (nameWords.length > 2) {
+      // Keep only first 2 words for the clean name
+      name = nameWords.slice(0, 2).join(' ');
+    }
     if (!name || name.length < 2) continue;
 
     seenUrls.add(profileUrl);
@@ -240,7 +247,7 @@ function getConnectionCards() {
     });
 
     for (const btn of allButtons) {
-      const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.parentElement.parentElement;
+      const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.parentElement?.parentElement;
       if (!card) continue;
 
       const link = card.querySelector('a[href*="/in/"]');
@@ -249,7 +256,11 @@ function getConnectionCards() {
       const profileUrl = normalizeUrl(link.getAttribute('href') || link.href);
       if (!profileUrl || seenUrls.has(profileUrl)) continue;
 
-      let name = link.textContent.trim().split('\n')[0].replace(/\s+/g, ' ').trim();
+      let name = (link.innerText || link.textContent || '').trim().split('\n')[0].replace(/\s+/g, ' ').trim();
+      name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
+      const parts = name.split(' ').filter(w => w.length > 0);
+      if (parts.length > 2) name = parts.slice(0, 2).join(' ');
+
       seenUrls.add(profileUrl);
       cards.push({
         cardElement: card,
@@ -265,216 +276,237 @@ function getConnectionCards() {
   return cards;
 }
 
-// Conversation Window Helper
-// Instead of hunting for a specific container class (which changes), just find
-// the active message text input directly — works for overlay bubbles AND compose dialogs.
-async function waitForConversationWindow() {
-  for (let i = 0; i < 30; i++) {
-    // Find ALL open, non-minimized message text boxes on the page
-    const textboxes = Array.from(document.querySelectorAll(
-      'div.msg-form__contenteditable[contenteditable="true"], ' +
-      'div[role="textbox"][contenteditable="true"]'
-    )).filter(el => {
-      // Must be visible (not in a minimized bubble)
-      const bubble = el.closest('.msg-overlay-conversation-bubble');
-      if (bubble && bubble.classList.contains('msg-overlay-conversation-bubble--minimized')) return false;
-      // Must be visible on screen
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    });
+// Close all existing open chat / compose windows
+function closeAllOpenChats() {
+  const closeSelectors = [
+    'button[data-control-name="overlay.close_conversation_window"]',
+    'button[data-control-name="overlay.close_compose_window"]',
+    'button[data-test-msg-overlay-conversation-bubble-close-button]',
+    'button.msg-overlay-bubble-header__control--close',
+    '.msg-overlay-bubble-header__controls button:last-child',
+    'aside.msg-overlay-container button[aria-label*="Close your conversation"]',
+    'aside.msg-overlay-container button[aria-label*="Close your draft"]',
+    'aside.msg-overlay-container button[aria-label*="Dismiss"]',
+    'aside.msg-overlay-container button[aria-label*="Close"]',
+    '.msg-compose-overlay button[aria-label*="Close"]',
+    '[role="dialog"] button[aria-label*="Close"]'
+  ];
 
-    if (textboxes.length > 0) {
-      // Return the LAST one (most recently opened)
-      const textbox = textboxes[textboxes.length - 1];
-      // Walk up to find the parent container
-      const container = textbox.closest(
-        '.msg-overlay-conversation-bubble, .msg-overlay-list-bubble, ' +
-        '.msg-compose-overlay, .msg-convo-wrapper, .msg-overlay-container, ' +
-        '.msg-s-message-list-container, [role="dialog"], ' +
-        '.application-outlet'
-      ) || textbox.parentElement?.parentElement?.parentElement || document.body;
-      console.log('[LAW] waitForConversationWindow: found textbox in container:', container?.className?.substring?.(0, 60));
-      return { textbox, container };
-    }
-    await sleep(250);
+  for (const sel of closeSelectors) {
+    const buttons = document.querySelectorAll(sel);
+    buttons.forEach(b => {
+      try { b.click(); } catch (e) {}
+    });
   }
-  console.warn('[LAW] waitForConversationWindow: timed out after 7.5s');
-  return null;
+
+  // Also dismiss any "Discard draft?" prompt if visible
+  const discardBtn = document.querySelector('button[data-test-dialog-primary-btn], [data-test-modal] button.artdeco-button--primary');
+  if (discardBtn && (discardBtn.innerText || '').toLowerCase().includes('discard')) {
+    discardBtn.click();
+  }
 }
 
-
-// Close Conversation Window Helper
+// Close a specific conversation window or compose window
 function closeConversationWindow(convoEl) {
   if (!convoEl) return;
   const closeBtn = convoEl.querySelector(
     'button[data-control-name="overlay.close_conversation_window"], ' +
+    'button[data-control-name="overlay.close_compose_window"], ' +
+    '.msg-overlay-bubble-header__controls button:last-child, ' +
     'button.msg-overlay-bubble-header__control--close, ' +
-    'button[aria-label*="Close conversation"], ' +
     'button[aria-label*="Close your conversation"], ' +
+    'button[aria-label*="Close your draft"], ' +
+    'button[aria-label*="Dismiss"], ' +
+    'button[aria-label*="Close"], ' +
     'button[data-test-msg-overlay-conversation-bubble-close-button]'
   );
   if (closeBtn) {
     closeBtn.click();
+  } else {
+    // Fallback: close all
+    closeAllOpenChats();
   }
 }
 
+// Conversation Window Helper
+// Finds the active message textbox anywhere on the page (works for overlay bubbles, compose dialogs, and modals)
+async function waitForConversationWindow() {
+  const textboxSelectors = [
+    'div.msg-form__contenteditable[contenteditable="true"]',
+    '.public-DraftEditor-content[contenteditable="true"]',
+    'div[role="textbox"][contenteditable="true"]',
+    'div[aria-label*="Write a message"]',
+    'div[aria-label*="message"][contenteditable="true"]',
+    '.msg-form [contenteditable="true"]',
+    '.msg-compose-overlay [contenteditable="true"]',
+    'aside.msg-overlay-container [contenteditable="true"]',
+    'div[data-placeholder*="Write a message"]',
+    'textarea.msg-form__textarea'
+  ];
+
+  for (let i = 0; i < 28; i++) {
+    for (const selector of textboxSelectors) {
+      const candidates = Array.from(document.querySelectorAll(selector)).filter(el => {
+        // Skip minimized bubbles
+        if (el.closest('.msg-overlay-conversation-bubble--minimized')) return false;
+        // Skip recipient pill/search input
+        if (el.closest('.msg-connections-typeahead, .artdeco-pill, [data-test-msg-compose-recipients]')) return false;
+        // Verify visible
+        const rect = el.getBoundingClientRect();
+        return rect.width > 30 && rect.height > 15;
+      });
+
+      if (candidates.length > 0) {
+        const textbox = candidates[candidates.length - 1];
+        const container = textbox.closest(
+          '.msg-overlay-conversation-bubble, .msg-overlay-list-bubble, ' +
+          '.msg-compose-overlay, .msg-convo-wrapper, .msg-overlay-container, ' +
+          '.msg-s-message-list-container, [role="dialog"], .application-outlet'
+        ) || textbox.parentElement?.parentElement?.parentElement || document.body;
+
+        console.log('[LAW] Found message box via selector:', selector);
+        return { textbox, container };
+      }
+    }
+    await sleep(250);
+  }
+
+  console.warn('[LAW] waitForConversationWindow timed out after 7s');
+  return null;
+}
+
 /**
- * Type text into a React-controlled contenteditable div.
- *
- * LinkedIn uses React 18 which fully ignores:
- *   - execCommand (deprecated, React bypasses it)
- *   - innerHTML / textContent mutations
- *   - ClipboardEvent with DataTransfer (clipboardData is read-only in real paste handlers)
- *
- * The ONLY reliable method is:
- *   1. `beforeinput` InputEvent with inputType='insertText' — React's actual handler
- *   2. Character-by-character `beforeinput` as the gold-standard fallback
- *   3. React Fiber internal __reactFiber onChange trigger as last resort
+ * Type text into LinkedIn's React / Draft.js message editor.
+ * Draft.js manages an internal EditorState.
+ * NEVER overwrite innerHTML or textContent directly — that destroys Draft.js's block tree.
+ * The standard, working technique is:
+ *   1. Focus the editor element
+ *   2. Select all (if needed)
+ *   3. document.execCommand('insertText', false, text)
+ *   4. Dispatch synthetic paste & input events as fallbacks
  */
 async function typeIntoReactInput(element, text) {
   if (!element || !text) return false;
 
-  console.log('[LAW] typeIntoReactInput called, text length:', text.length);
+  console.log('[LAW] typeIntoReactInput starting. Target text:', text);
 
   try {
-    // Step 1: Focus the element
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    element.click();
     element.focus();
-    await sleep(300);
+    await sleep(250);
 
-    // Step 2: Select all & delete existing content via keyboard events
-    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', code: 'KeyA', ctrlKey: true, metaKey: false }));
-    await sleep(50);
-    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Delete', code: 'Delete' }));
-    element.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
-    element.textContent = '';
-    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    await sleep(200);
-
-    // ── METHOD 1: Single `beforeinput` with full text (fastest) ──────────────
-    console.log('[LAW] Trying Method 1: beforeinput insertText (full string)');
-    element.focus();
+    // Draft.js native insertion: select all existing content without destroying DOM blocks
+    document.execCommand('selectAll', false, null);
     await sleep(100);
 
-    const beforeInputEvent = new InputEvent('beforeinput', {
+    // Method 1: execCommand('insertText') — Draft.js natively intercepts this
+    const execSuccess = document.execCommand('insertText', false, text);
+    console.log('[LAW] Method 1 (execCommand insertText):', execSuccess);
+    await sleep(300);
+
+    // Check if text is present
+    if (element.textContent && element.textContent.trim().length > 0) {
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      console.log('[LAW] Method 1 SUCCESS! Editor text:', element.textContent.trim().substring(0, 40));
+      return true;
+    }
+
+    // Method 2: Synthetic Clipboard paste event (Draft.js handles paste)
+    console.log('[LAW] Trying Method 2: Synthetic paste');
+    element.focus();
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      const pasteEvt = new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true
+      });
+      element.dispatchEvent(pasteEvt);
+      await sleep(300);
+
+      if (element.textContent && element.textContent.trim().length > 0) {
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        console.log('[LAW] Method 2 (paste) SUCCESS!');
+        return true;
+      }
+    } catch (pasteErr) {
+      console.warn('[LAW] Method 2 error:', pasteErr);
+    }
+
+    // Method 3: beforeinput InputEvent (React's synthetic event trigger)
+    console.log('[LAW] Trying Method 3: beforeinput event');
+    element.focus();
+    const bi = new InputEvent('beforeinput', {
       bubbles: true,
       cancelable: true,
       inputType: 'insertText',
-      data: text,
+      data: text
     });
-    const notCancelled = element.dispatchEvent(beforeInputEvent);
+    element.dispatchEvent(bi);
+    await sleep(200);
 
-    if (notCancelled) {
-      // React may handle beforeinput but not mutate DOM — also set manually
+    // If still empty, insert text node into selection
+    if (!element.textContent || element.textContent.trim().length === 0) {
       const sel = window.getSelection();
       if (sel && sel.rangeCount > 0) {
         const range = sel.getRangeAt(0);
         range.deleteContents();
         range.insertNode(document.createTextNode(text));
         range.collapse(false);
-      } else {
-        element.textContent = text;
       }
     }
 
     element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-    await sleep(400);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(300);
 
-    if (element.textContent && element.textContent.trim().length > 0) {
-      console.log('[LAW] Method 1 SUCCESS. Text:', element.textContent.trim().substring(0, 40));
-      return true;
-    }
-
-    // ── METHOD 2: Character-by-character beforeinput (gold standard) ─────────
-    console.log('[LAW] Method 1 failed. Trying Method 2: char-by-char beforeinput');
-    element.focus();
-    await sleep(100);
-    // Clear again
-    element.textContent = '';
-    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    await sleep(100);
-
-    for (const char of text) {
-      element.focus();
-      const bi = new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: char,
-      });
-      element.dispatchEvent(bi);
-
-      // Manually append the character too (React may not mutate DOM itself)
-      element.textContent = (element.textContent || '') + char;
-
-      element.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: 'insertText',
-        data: char,
-      }));
-      await sleep(15);
-    }
-
-    await sleep(400);
-
-    if (element.textContent && element.textContent.trim().length > 0) {
-      console.log('[LAW] Method 2 SUCCESS. Text:', element.textContent.trim().substring(0, 40));
-      return true;
-    }
-
-    // ── METHOD 3: React Fiber internal onChange + execCommand ─────────────────
-    console.log('[LAW] Method 2 failed. Trying Method 3: React Fiber + execCommand');
-    element.focus();
-    await sleep(100);
-
-    // Use execCommand (may still work in some Chrome versions for contenteditable)
-    document.execCommand('selectAll', false);
-    document.execCommand('insertText', false, text);
-    await sleep(200);
-
-    if (element.textContent && element.textContent.trim().length > 0) {
-      console.log('[LAW] Method 3a execCommand SUCCESS');
-      return true;
-    }
-
-    // React Fiber: walk up to find onChange handler
-    element.innerHTML = `<p>${text}</p>`;
-    const reactFiberKey = Object.keys(element).find(k =>
-      k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance') || k.startsWith('__reactProps')
-    );
-
-    if (reactFiberKey) {
-      let fiber = element[reactFiberKey];
-      // If it's a props key, just call onChange directly
-      if (reactFiberKey.startsWith('__reactProps')) {
-        const props = element[reactFiberKey];
-        if (props && props.onChange) {
-          props.onChange({ target: element, currentTarget: element, nativeEvent: { data: text }, bubbles: true });
-          console.log('[LAW] Method 3b reactProps.onChange called');
-        }
-      } else {
-        while (fiber) {
-          const onChange = fiber.pendingProps?.onChange || fiber.memoizedProps?.onChange;
-          if (onChange) {
-            onChange({ target: element, currentTarget: element, nativeEvent: { data: text }, bubbles: true });
-            console.log('[LAW] Method 3b React Fiber onChange called');
-            break;
-          }
-          fiber = fiber.return;
-        }
-      }
-    }
-
-    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-    await sleep(400);
-
-    const finalCheck = element.textContent && element.textContent.trim().length > 0;
-    console.log('[LAW] Method 3 result:', finalCheck, '| content:', element.textContent?.trim()?.substring(0, 40));
-    return finalCheck;
+    const hasText = element.textContent && element.textContent.trim().length > 0;
+    console.log('[LAW] Method 3 result:', hasText, '| text:', element.textContent?.trim()?.substring(0, 40));
+    return hasText;
 
   } catch (err) {
     console.error('[LAW] typeIntoReactInput error:', err);
     return false;
   }
+}
+
+// Find Send button by container, attributes, and text
+function findSendButton(container, textBox) {
+  const scope = container || document;
+
+  // 1. Standard LinkedIn send button selectors
+  const selectors = [
+    'button.msg-form__send-button',
+    'button[data-test-msg-send-btn="true"]',
+    'button[type="submit"].msg-form__send-btn',
+    'button.msg-form__send-btn',
+    'button[type="submit"]'
+  ];
+
+  for (const sel of selectors) {
+    const btn = scope.querySelector(sel);
+    if (btn && btn.offsetParent !== null) return btn;
+  }
+
+  // 2. Look by visible text "Send" inside the scope
+  const allButtons = Array.from(scope.querySelectorAll('button'));
+  const textSendBtn = allButtons.find(b => {
+    const text = (b.innerText || b.textContent || '').trim().toLowerCase();
+    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+    return (text === 'send' || aria === 'send' || aria.includes('send message')) && b.offsetParent !== null;
+  });
+  if (textSendBtn) return textSendBtn;
+
+  // 3. Fallback: search entire document
+  for (const sel of selectors) {
+    const btn = document.querySelector(sel);
+    if (btn && btn.offsetParent !== null) return btn;
+  }
+
+  return null;
 }
 
 // Main Automation Sequence
@@ -509,6 +541,10 @@ async function runAutoWelcomeSequence() {
       return;
     }
 
+    // Close any leftover chat windows from previous sessions
+    closeAllOpenChats();
+    await sleep(600);
+
     updateHud('Detecting connections on page...', `Today: ${stats.todayCount}/${settings.dailyLimit}`);
     await sleep(1200);
 
@@ -535,7 +571,7 @@ async function runAutoWelcomeSequence() {
     }
 
     updateHud(`Found ${connections.length} connections. Checking history...`, `Today: ${stats.todayCount}/${settings.dailyLimit}`);
-    await sleep(1200);
+    await sleep(1000);
 
     const unmessaged = connections.filter(c => !sentMap.has(c.profileUrl));
 
@@ -564,31 +600,37 @@ async function runAutoWelcomeSequence() {
         break;
       }
 
+      // Close any stray open chat before opening next
+      closeAllOpenChats();
+      await sleep(400);
+
       const firstName = extractFirstName(conn.name);
       updateHud(`Opening chat with ${conn.name}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
 
       // Scroll card into view
       conn.cardElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      await sleep(1000);
+      await sleep(800);
 
       if (shouldStop) break;
 
       // Click "Message" button
+      conn.messageButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      conn.messageButton.focus();
       conn.messageButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       conn.messageButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
       conn.messageButton.click();
 
-      // Wait for conversation window to pop up
+      // Wait for conversation/compose window to appear
       const convoResult = await waitForConversationWindow();
 
       if (!convoResult) {
         updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
-        console.warn('Could not locate conversation window for', conn.name);
+        console.warn('[LAW] Could not locate conversation window for', conn.name);
         continue;
       }
 
-      const { textbox: foundTextbox, container: activeConvo } = convoResult;
-      await sleep(1500);
+      const { textbox: textBox, container: activeConvo } = convoResult;
+      await sleep(1200);
 
       // Check if real conversation history exists (not system connection banner)
       if (settings.skipExistingChats) {
@@ -613,29 +655,9 @@ async function runAutoWelcomeSequence() {
           sentMap.add(conn.profileUrl);
 
           closeConversationWindow(activeConvo);
-          await sleep(1500);
+          await sleep(1000);
           continue;
         }
-      }
-
-      // Use the textbox we already found (or re-find it if needed)
-      let textBox = foundTextbox;
-      if (!textBox || !document.body.contains(textBox)) {
-        for (let i = 0; i < 10; i++) {
-          textBox = document.querySelector(
-            'div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"]'
-          );
-          if (textBox) break;
-          await sleep(250);
-        }
-      }
-
-      if (!textBox) {
-        updateHud(`⚠️ Couldn't find text box for ${firstName}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
-        console.warn('Could not find text input for', conn.name);
-        closeConversationWindow(activeConvo);
-        await sleep(1000);
-        continue;
       }
 
       // Prepare personalized message
@@ -643,69 +665,55 @@ async function runAutoWelcomeSequence() {
         .replace(/\{firstName\}/gi, firstName)
         .replace(/\{fullName\}/gi, conn.name);
 
-      updateHud(`Found text box! Typing message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      updateHud(`Found chat! Typing message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
 
-      // Focus the textbox
-      textBox.focus();
-      await sleep(400);
-
-      // --- REACT-COMPATIBLE TEXT INJECTION ---
+      // Type the message into the Draft.js editor
       const typed = await typeIntoReactInput(textBox, personalizedMessage);
 
       if (!typed) {
         updateHud(`⚠️ Could not type for ${firstName}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
-        console.warn('Could not type message for', conn.name);
+        console.warn('[LAW] Could not type message for', conn.name);
         closeConversationWindow(activeConvo);
         await sleep(1000);
         continue;
       }
 
-      updateHud(`✏️ Message typed for ${firstName}! Finding send button...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
-      await sleep(1200);
+      updateHud(`✏️ Message typed for ${firstName}! Locating Send button...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      await sleep(1000);
 
       if (shouldStop) {
         closeConversationWindow(activeConvo);
         break;
       }
 
-      // Find send button — search the whole page, not just the container
+      // Find send button and wait for it to become enabled (up to 5 seconds)
       let sendBtn = null;
       for (let i = 0; i < 20; i++) {
-        // Search within container first, then fallback to full page
-        sendBtn = activeConvo.querySelector(
-          'button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[type="submit"]'
-        ) || document.querySelector(
-          'button.msg-form__send-button, button[data-test-msg-send-btn="true"]'
-        );
+        sendBtn = findSendButton(activeConvo, textBox);
         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
           break;
-        }
-        if (sendBtn && i === 10) {
-          console.log('[LAW] Send button still disabled at 2.5s. aria-disabled:', sendBtn.getAttribute('aria-disabled'));
-          console.log('[LAW] textBox content:', textBox.textContent?.trim()?.substring(0, 60));
-          updateHud(`⏳ Waiting for send button to activate...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
         }
         sendBtn = null;
         await sleep(250);
       }
 
-      // If button is still disabled but text IS present, force-enable and click anyway
+      // Force-send fallback: if button exists and text is present in the editor
       if (!sendBtn) {
-        const possibleBtn = activeConvo.querySelector(
-          'button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[type="submit"]'
-        ) || document.querySelector('button.msg-form__send-button');
+        const fallbackBtn = findSendButton(activeConvo, textBox);
         const hasText = textBox.textContent && textBox.textContent.trim().length > 0;
-        if (possibleBtn && hasText) {
+        if (fallbackBtn && hasText) {
           console.log('[LAW] Force-enabling send button. Text present:', textBox.textContent.trim().substring(0, 40));
-          updateHud(`⚡ Forcing send for ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
-          possibleBtn.removeAttribute('aria-disabled');
-          possibleBtn.disabled = false;
-          sendBtn = possibleBtn;
+          updateHud(`⚡ Sending message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+          fallbackBtn.removeAttribute('aria-disabled');
+          fallbackBtn.disabled = false;
+          sendBtn = fallbackBtn;
         }
       }
 
-      if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
-        updateHud(`Sending message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      if (sendBtn) {
+        updateHud(`🚀 Sending message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        sendBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        sendBtn.focus();
         sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
         sendBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
         sendBtn.click();
@@ -739,10 +747,10 @@ async function runAutoWelcomeSequence() {
             sentHistory: [newRecord, ...history].slice(0, 500)
           });
         } catch (e) {
-          console.error('Failed to save record:', e);
+          console.error('[LAW] Failed to save record:', e);
         }
 
-        // Close conversation window
+        // Close conversation window cleanly
         closeConversationWindow(activeConvo);
         await sleep(1500);
 
@@ -756,7 +764,7 @@ async function runAutoWelcomeSequence() {
           await sleep(1000);
         }
       } else {
-        console.warn('Send button was not active for', conn.name);
+        console.warn('[LAW] Send button was not active for', conn.name);
         closeConversationWindow(activeConvo);
         await sleep(1500);
       }
@@ -782,6 +790,7 @@ async function runAutoWelcomeSequence() {
     isRunning = false;
   }
 }
+
 
 // Runtime message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
