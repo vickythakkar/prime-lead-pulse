@@ -284,12 +284,12 @@ function closeAllOpenChats() {
     'button[data-test-msg-overlay-conversation-bubble-close-button]',
     'button.msg-overlay-bubble-header__control--close',
     '.msg-overlay-bubble-header__controls button:last-child',
-    'aside.msg-overlay-container button[aria-label*="Close your conversation"]',
-    'aside.msg-overlay-container button[aria-label*="Close your draft"]',
-    'aside.msg-overlay-container button[aria-label*="Dismiss"]',
-    'aside.msg-overlay-container button[aria-label*="Close"]',
-    '.msg-compose-overlay button[aria-label*="Close"]',
-    '[role="dialog"] button[aria-label*="Close"]'
+    '.msg-overlay-bubble-header button:last-child',
+    'aside.msg-overlay-container button[aria-label*="Close" i]',
+    'aside.msg-overlay-container button[aria-label*="Dismiss" i]',
+    '.msg-compose-overlay button[aria-label*="Close" i]',
+    '[role="dialog"] button[aria-label*="Close" i]',
+    'button.artdeco-modal__dismiss'
   ];
 
   for (const sel of closeSelectors) {
@@ -300,90 +300,77 @@ function closeAllOpenChats() {
   }
 
   // Also dismiss any "Discard draft?" prompt if visible
-  const discardBtn = document.querySelector('button[data-test-dialog-primary-btn], [data-test-modal] button.artdeco-button--primary');
-  if (discardBtn && (discardBtn.innerText || '').toLowerCase().includes('discard')) {
-    discardBtn.click();
-  }
+  const discardBtns = Array.from(document.querySelectorAll('button')).filter(b => {
+    const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+    return txt === 'discard';
+  });
+  discardBtns.forEach(b => {
+    try { b.click(); } catch (e) {}
+  });
 }
 
 // Close a specific conversation window or compose window
 function closeConversationWindow(convoEl) {
-  if (!convoEl) return;
-  const closeBtn = convoEl.querySelector(
-    'button[data-control-name="overlay.close_conversation_window"], ' +
-    'button[data-control-name="overlay.close_compose_window"], ' +
-    '.msg-overlay-bubble-header__controls button:last-child, ' +
-    'button.msg-overlay-bubble-header__control--close, ' +
-    'button[aria-label*="Close your conversation"], ' +
-    'button[aria-label*="Close your draft"], ' +
-    'button[aria-label*="Dismiss"], ' +
-    'button[aria-label*="Close"], ' +
-    'button[data-test-msg-overlay-conversation-bubble-close-button]'
-  );
-  if (closeBtn) {
-    closeBtn.click();
-  } else {
-    // Fallback: close all
-    closeAllOpenChats();
+  if (convoEl) {
+    const closeBtn = convoEl.querySelector(
+      'button[data-control-name="overlay.close_conversation_window"], ' +
+      'button[data-control-name="overlay.close_compose_window"], ' +
+      '.msg-overlay-bubble-header__controls button:last-child, ' +
+      '.msg-overlay-bubble-header button:last-child, ' +
+      'button.msg-overlay-bubble-header__control--close, ' +
+      'button[aria-label*="Close" i], ' +
+      'button[aria-label*="Dismiss" i], ' +
+      'button[data-test-msg-overlay-conversation-bubble-close-button]'
+    );
+    if (closeBtn) {
+      try { closeBtn.click(); } catch (e) {}
+      return;
+    }
   }
+  // Fallback: close all
+  closeAllOpenChats();
 }
 
 // Conversation Window Helper
-// Finds the active message textbox anywhere on the page (works for overlay bubbles, compose dialogs, and modals)
+// On the connections page, the ONLY contenteditable element is the message compose / conversation textbox!
 async function waitForConversationWindow() {
-  const textboxSelectors = [
-    'div.msg-form__contenteditable[contenteditable="true"]',
-    '.public-DraftEditor-content[contenteditable="true"]',
-    'div[role="textbox"][contenteditable="true"]',
-    'div[aria-label*="Write a message"]',
-    'div[aria-label*="message"][contenteditable="true"]',
-    '.msg-form [contenteditable="true"]',
-    '.msg-compose-overlay [contenteditable="true"]',
-    'aside.msg-overlay-container [contenteditable="true"]',
-    'div[data-placeholder*="Write a message"]',
-    'textarea.msg-form__textarea'
-  ];
+  console.log('[LAW] Waiting for message box to appear on page...');
 
-  for (let i = 0; i < 28; i++) {
-    for (const selector of textboxSelectors) {
-      const candidates = Array.from(document.querySelectorAll(selector)).filter(el => {
-        // Skip minimized bubbles
-        if (el.closest('.msg-overlay-conversation-bubble--minimized')) return false;
-        // Skip recipient pill/search input
-        if (el.closest('.msg-connections-typeahead, .artdeco-pill, [data-test-msg-compose-recipients]')) return false;
-        // Verify visible
-        const rect = el.getBoundingClientRect();
-        return rect.width > 30 && rect.height > 15;
-      });
+  for (let i = 0; i < 25; i++) {
+    // Look for any message contenteditable or textbox element
+    const candidates = Array.from(document.querySelectorAll(
+      '.msg-form__contenteditable, [contenteditable="true"], div[role="textbox"], .public-DraftEditor-content'
+    )).filter(el => {
+      // Must not be the top navbar search
+      if (el.closest('header, nav, #global-nav, .global-nav')) return false;
+      // Must not be minimized
+      if (el.closest('.msg-overlay-conversation-bubble--minimized')) return false;
+      // Must be visible
+      return el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0;
+    });
 
-      if (candidates.length > 0) {
-        const textbox = candidates[candidates.length - 1];
-        const container = textbox.closest(
-          '.msg-overlay-conversation-bubble, .msg-overlay-list-bubble, ' +
-          '.msg-compose-overlay, .msg-convo-wrapper, .msg-overlay-container, ' +
-          '.msg-s-message-list-container, [role="dialog"], .application-outlet'
-        ) || textbox.parentElement?.parentElement?.parentElement || document.body;
+    if (candidates.length > 0) {
+      // Pick the last (most recently opened)
+      const textbox = candidates[candidates.length - 1];
+      const container = textbox.closest(
+        '.msg-overlay-conversation-bubble, .msg-overlay-list-bubble, ' +
+        '.msg-compose-overlay, .msg-convo-wrapper, .msg-overlay-container, ' +
+        '.msg-s-message-list-container, [role="dialog"], .application-outlet'
+      ) || textbox.parentElement?.parentElement?.parentElement || document.body;
 
-        console.log('[LAW] Found message box via selector:', selector);
-        return { textbox, container };
-      }
+      console.log('[LAW] Found message box successfully:', textbox.className || textbox.tagName);
+      return { textbox, container };
     }
+
     await sleep(250);
   }
 
-  console.warn('[LAW] waitForConversationWindow timed out after 7s');
+  console.warn('[LAW] waitForConversationWindow timed out');
   return null;
 }
 
 /**
  * Type text into LinkedIn's React / Draft.js message editor.
- * Draft.js manages an internal EditorState.
- * NEVER overwrite innerHTML or textContent directly — that destroys Draft.js's block tree.
- * The standard, working technique is:
- *   1. Focus the editor element
- *   2. Select all (if needed)
- *   3. document.execCommand('insertText', false, text)
- *   4. Dispatch synthetic paste & input events as fallbacks
  */
 async function typeIntoReactInput(element, text) {
   if (!element || !text) return false;
@@ -391,12 +378,14 @@ async function typeIntoReactInput(element, text) {
   console.log('[LAW] typeIntoReactInput starting. Target text:', text);
 
   try {
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    element.click();
-    element.focus();
+    // Focus target (either element itself or inner Draft.js editor child)
+    const target = element.querySelector('.public-DraftEditor-content, p') || element;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.click();
+    target.focus();
     await sleep(250);
 
-    // Draft.js native insertion: select all existing content without destroying DOM blocks
+    // Select existing content (without wiping DOM blocks)
     document.execCommand('selectAll', false, null);
     await sleep(100);
 
@@ -415,7 +404,7 @@ async function typeIntoReactInput(element, text) {
 
     // Method 2: Synthetic Clipboard paste event (Draft.js handles paste)
     console.log('[LAW] Trying Method 2: Synthetic paste');
-    element.focus();
+    target.focus();
     try {
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
@@ -424,7 +413,7 @@ async function typeIntoReactInput(element, text) {
         bubbles: true,
         cancelable: true
       });
-      element.dispatchEvent(pasteEvt);
+      target.dispatchEvent(pasteEvt);
       await sleep(300);
 
       if (element.textContent && element.textContent.trim().length > 0) {
@@ -436,16 +425,16 @@ async function typeIntoReactInput(element, text) {
       console.warn('[LAW] Method 2 error:', pasteErr);
     }
 
-    // Method 3: beforeinput InputEvent (React's synthetic event trigger)
+    // Method 3: beforeinput InputEvent
     console.log('[LAW] Trying Method 3: beforeinput event');
-    element.focus();
+    target.focus();
     const bi = new InputEvent('beforeinput', {
       bubbles: true,
       cancelable: true,
       inputType: 'insertText',
       data: text
     });
-    element.dispatchEvent(bi);
+    target.dispatchEvent(bi);
     await sleep(200);
 
     // If still empty, insert text node into selection
@@ -472,6 +461,7 @@ async function typeIntoReactInput(element, text) {
     return false;
   }
 }
+
 
 // Find Send button by container, attributes, and text
 function findSendButton(container, textBox) {
