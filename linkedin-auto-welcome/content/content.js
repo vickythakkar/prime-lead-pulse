@@ -266,22 +266,42 @@ function getConnectionCards() {
 }
 
 // Conversation Window Helper
+// Instead of hunting for a specific container class (which changes), just find
+// the active message text input directly — works for overlay bubbles AND compose dialogs.
 async function waitForConversationWindow() {
-  for (let i = 0; i < 20; i++) {
-    const bubbles = Array.from(document.querySelectorAll(
-      '.msg-overlay-conversation-bubble, [data-control-name="overlay.conversation_window"], .msg-convo-wrapper, aside.msg-overlay-container > div'
+  for (let i = 0; i < 30; i++) {
+    // Find ALL open, non-minimized message text boxes on the page
+    const textboxes = Array.from(document.querySelectorAll(
+      'div.msg-form__contenteditable[contenteditable="true"], ' +
+      'div[role="textbox"][contenteditable="true"]'
     )).filter(el => {
-      return el.querySelector('.msg-form__contenteditable, div[role="textbox"], .msg-form') &&
-             !el.classList.contains('msg-overlay-conversation-bubble--minimized');
+      // Must be visible (not in a minimized bubble)
+      const bubble = el.closest('.msg-overlay-conversation-bubble');
+      if (bubble && bubble.classList.contains('msg-overlay-conversation-bubble--minimized')) return false;
+      // Must be visible on screen
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
     });
 
-    if (bubbles.length > 0) {
-      return bubbles[bubbles.length - 1];
+    if (textboxes.length > 0) {
+      // Return the LAST one (most recently opened)
+      const textbox = textboxes[textboxes.length - 1];
+      // Walk up to find the parent container
+      const container = textbox.closest(
+        '.msg-overlay-conversation-bubble, .msg-overlay-list-bubble, ' +
+        '.msg-compose-overlay, .msg-convo-wrapper, .msg-overlay-container, ' +
+        '.msg-s-message-list-container, [role="dialog"], ' +
+        '.application-outlet'
+      ) || textbox.parentElement?.parentElement?.parentElement || document.body;
+      console.log('[LAW] waitForConversationWindow: found textbox in container:', container?.className?.substring?.(0, 60));
+      return { textbox, container };
     }
     await sleep(250);
   }
+  console.warn('[LAW] waitForConversationWindow: timed out after 7.5s');
   return null;
 }
+
 
 // Close Conversation Window Helper
 function closeConversationWindow(convoEl) {
@@ -559,13 +579,15 @@ async function runAutoWelcomeSequence() {
       conn.messageButton.click();
 
       // Wait for conversation window to pop up
-      const activeConvo = await waitForConversationWindow();
+      const convoResult = await waitForConversationWindow();
 
-      if (!activeConvo) {
+      if (!convoResult) {
+        updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
         console.warn('Could not locate conversation window for', conn.name);
         continue;
       }
 
+      const { textbox: foundTextbox, container: activeConvo } = convoResult;
       await sleep(1500);
 
       // Check if real conversation history exists (not system connection banner)
@@ -576,7 +598,6 @@ async function runAutoWelcomeSequence() {
 
         if (actualMessages && actualMessages.length > 0) {
           updateHud(`Skipping ${conn.name} (prior chat history detected)...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
-          // Record as skipped in storage
           const local = await chrome.storage.local.get('sentHistory');
           const history = local.sentHistory || [];
           const record = {
@@ -597,14 +618,16 @@ async function runAutoWelcomeSequence() {
         }
       }
 
-      // Find text input
-      let textBox = null;
-      for (let i = 0; i < 15; i++) {
-        textBox = activeConvo.querySelector(
-          'div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], div[aria-label*="Write a message"], div[aria-label*="message"]'
-        );
-        if (textBox) break;
-        await sleep(250);
+      // Use the textbox we already found (or re-find it if needed)
+      let textBox = foundTextbox;
+      if (!textBox || !document.body.contains(textBox)) {
+        for (let i = 0; i < 10; i++) {
+          textBox = document.querySelector(
+            'div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"]'
+          );
+          if (textBox) break;
+          await sleep(250);
+        }
       }
 
       if (!textBox) {
@@ -645,11 +668,14 @@ async function runAutoWelcomeSequence() {
         break;
       }
 
-      // Find send button and wait for it to become enabled (up to 5 seconds)
+      // Find send button — search the whole page, not just the container
       let sendBtn = null;
       for (let i = 0; i < 20; i++) {
+        // Search within container first, then fallback to full page
         sendBtn = activeConvo.querySelector(
           'button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[type="submit"]'
+        ) || document.querySelector(
+          'button.msg-form__send-button, button[data-test-msg-send-btn="true"]'
         );
         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
           break;
@@ -667,7 +693,7 @@ async function runAutoWelcomeSequence() {
       if (!sendBtn) {
         const possibleBtn = activeConvo.querySelector(
           'button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[type="submit"]'
-        );
+        ) || document.querySelector('button.msg-form__send-button');
         const hasText = textBox.textContent && textBox.textContent.trim().length > 0;
         if (possibleBtn && hasText) {
           console.log('[LAW] Force-enabling send button. Text present:', textBox.textContent.trim().substring(0, 40));
