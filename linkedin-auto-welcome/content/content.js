@@ -76,7 +76,7 @@ async function getExtensionData() {
   }
 }
 
-// In-Page HUD
+// In-Page Floating HUD
 function getOrCreateHud() {
   if (hudElement && document.body.contains(hudElement)) {
     return hudElement;
@@ -149,30 +149,53 @@ function stopAutomation(reason = 'Stopped') {
   });
 }
 
+// Helper: check if element is a "Message" button
+function isMessageButton(el) {
+  if (!el) return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag !== 'button' && tag !== 'a') return false;
+
+  // Check classes
+  if (el.classList.contains('message-anywhere-button')) return true;
+
+  // Check aria-label
+  const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+  if (aria.includes('message')) return true;
+
+  // Check inner text or span (e.g. .artdeco-button__text)
+  const textSpan = el.querySelector('.artdeco-button__text, span');
+  if (textSpan && textSpan.textContent.trim().toLowerCase() === 'message') return true;
+
+  // Check raw text content
+  const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+  if (text.includes('message') && !text.includes('more')) return true;
+
+  return false;
+}
+
 // ROBUST DOM-INVARIANT CONNECTION CARD FINDER
 function getConnectionCards() {
   const cards = [];
   const seenUrls = new Set();
 
-  // Find all "Message" buttons on the page
-  const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button'));
-  const messageButtons = allButtons.filter(btn => {
-    // Ignore buttons inside top navbar or messaging overlay
-    if (btn.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud')) return false;
-
-    const text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
-    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-    return text === 'message' || aria.startsWith('message ') || aria.startsWith('send a message to');
+  // Find all profile links on page (excluding top navbar, ads, and HUD)
+  const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
+    return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud');
   });
 
-  for (const btn of messageButtons) {
-    // Walk up to find row container (li, div.artdeco-list__item, or container)
-    let card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.closest('[data-view-name]');
+  for (const link of allProfileLinks) {
+    const rawHref = link.getAttribute('href') || link.href || '';
+    const profileUrl = normalizeUrl(rawHref);
+
+    if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
+
+    // Walk up to find the row container (li, div.artdeco-list__item, or row element)
+    let card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
 
     if (!card) {
-      let curr = btn.parentElement;
-      for (let i = 0; i < 5 && curr && curr !== document.body; i++) {
-        if (curr.querySelector('a[href*="/in/"]')) {
+      let curr = link.parentElement;
+      for (let i = 0; i < 6 && curr && curr !== document.body; i++) {
+        if (curr.querySelector('button, a.artdeco-button')) {
           card = curr;
           break;
         }
@@ -182,49 +205,80 @@ function getConnectionCards() {
 
     if (!card) continue;
 
-    // Find profile link inside this card
-    const linkEl = card.querySelector('a[href*="/in/"]');
-    if (!linkEl) continue;
+    // Find the Message button inside this card
+    const buttons = Array.from(card.querySelectorAll('button, a'));
+    const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
 
-    const rawHref = linkEl.getAttribute('href') || linkEl.href;
-    const profileUrl = normalizeUrl(rawHref);
-
-    if (!profileUrl || seenUrls.has(profileUrl)) continue;
+    if (!messageBtn) continue;
 
     // Extract name
     let name = '';
-    const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title, span[aria-hidden="true"], h3, strong');
-    if (nameEl && nameEl.textContent.trim()) {
-      name = nameEl.textContent.trim();
+    const titleEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title, span[aria-hidden="true"], h3, strong');
+    if (titleEl && titleEl.textContent.trim()) {
+      name = titleEl.textContent.trim();
     } else {
-      name = linkEl.textContent.trim();
+      name = link.textContent.trim();
     }
-    name = name.split('\n')[0].trim();
+
+    name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
+    if (!name || name.length < 2) continue;
 
     seenUrls.add(profileUrl);
     cards.push({
       cardElement: card,
-      linkElement: linkEl,
-      messageButton: btn,
-      name: name || 'LinkedIn Member',
+      linkElement: link,
+      messageButton: messageBtn,
+      name: name,
       profileUrl: profileUrl
     });
   }
 
+  // Backup Strategy: Search directly for Message buttons if profile links scan yielded 0
+  if (cards.length === 0) {
+    const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
+      return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud') && isMessageButton(b);
+    });
+
+    for (const btn of allButtons) {
+      const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.parentElement.parentElement;
+      if (!card) continue;
+
+      const link = card.querySelector('a[href*="/in/"]');
+      if (!link) continue;
+
+      const profileUrl = normalizeUrl(link.getAttribute('href') || link.href);
+      if (!profileUrl || seenUrls.has(profileUrl)) continue;
+
+      let name = link.textContent.trim().split('\n')[0].replace(/\s+/g, ' ').trim();
+      seenUrls.add(profileUrl);
+      cards.push({
+        cardElement: card,
+        linkElement: link,
+        messageButton: btn,
+        name: name || 'LinkedIn Member',
+        profileUrl: profileUrl
+      });
+    }
+  }
+
+  console.log('[LinkedIn Auto Welcome] Detected connection cards:', cards.length, cards.map(c => c.name));
   return cards;
 }
 
 // Conversation Window Helper
 async function waitForConversationWindow() {
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 20; i++) {
     const bubbles = Array.from(document.querySelectorAll(
-      '.msg-overlay-conversation-bubble, [data-control-name="overlay.conversation_window"], .msg-convo-wrapper'
-    )).filter(el => !el.classList.contains('msg-overlay-conversation-bubble--minimized'));
+      '.msg-overlay-conversation-bubble, [data-control-name="overlay.conversation_window"], .msg-convo-wrapper, aside.msg-overlay-container > div'
+    )).filter(el => {
+      return el.querySelector('.msg-form__contenteditable, div[role="textbox"], .msg-form') &&
+             !el.classList.contains('msg-overlay-conversation-bubble--minimized');
+    });
 
     if (bubbles.length > 0) {
-      return bubbles[bubbles.length - 1]; // most recently opened
+      return bubbles[bubbles.length - 1];
     }
-    await sleep(300);
+    await sleep(250);
   }
   return null;
 }
@@ -276,8 +330,8 @@ async function runAutoWelcomeSequence() {
       return;
     }
 
-    updateHud('Detecting newly added connections...', `Today: ${stats.todayCount}/${settings.dailyLimit}`);
-    await sleep(1500);
+    updateHud('Detecting connections on page...', `Today: ${stats.todayCount}/${settings.dailyLimit}`);
+    await sleep(1200);
 
     // Map existing sent history
     const sentMap = new Set((sentHistory || []).map(h => normalizeUrl(h.profileUrl)));
@@ -286,18 +340,23 @@ async function runAutoWelcomeSequence() {
     let connections = getConnectionCards();
 
     if (connections.length === 0) {
-      updateHud('Looking for connections... scrolling down slightly');
+      updateHud('Scanning connections list (scrolling down)...');
       window.scrollBy({ top: 350, behavior: 'smooth' });
-      await sleep(2000);
+      await sleep(1500);
+      window.scrollBy({ top: -100, behavior: 'smooth' });
+      await sleep(1000);
       connections = getConnectionCards();
     }
 
     if (connections.length === 0) {
       updateHud('Could not detect connection cards on this page. Please refresh and try again.');
-      setTimeout(hideHud, 5000);
+      setTimeout(hideHud, 6000);
       isRunning = false;
       return;
     }
+
+    updateHud(`Found ${connections.length} connections. Checking history...`, `Today: ${stats.todayCount}/${settings.dailyLimit}`);
+    await sleep(1200);
 
     const unmessaged = connections.filter(c => !sentMap.has(c.profileUrl));
 
@@ -311,6 +370,9 @@ async function runAutoWelcomeSequence() {
       isRunning = false;
       return;
     }
+
+    updateHud(`Ready to message ${unmessaged.length} newly accepted connection(s)...`, `Today: ${stats.todayCount}/${settings.dailyLimit}`);
+    await sleep(1500);
 
     let processedInSession = 0;
     let currentTodayCount = stats.todayCount;
@@ -326,13 +388,15 @@ async function runAutoWelcomeSequence() {
       const firstName = extractFirstName(conn.name);
       updateHud(`Opening chat with ${conn.name}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
 
-      // Scroll into view
+      // Scroll card into view
       conn.cardElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
       await sleep(1000);
 
       if (shouldStop) break;
 
       // Click "Message" button
+      conn.messageButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      conn.messageButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
       conn.messageButton.click();
 
       // Wait for conversation window to pop up
@@ -345,7 +409,7 @@ async function runAutoWelcomeSequence() {
 
       await sleep(1500);
 
-      // Check if conversation history exists (only check ACTUAL messages, not system banners)
+      // Check if real conversation history exists (not system connection banner)
       if (settings.skipExistingChats) {
         const actualMessages = activeConvo.querySelectorAll(
           '.msg-s-event-listitem__body, .msg-s-message-group__item, .msg-s-event-listitem__message-bubble'
@@ -353,22 +417,21 @@ async function runAutoWelcomeSequence() {
 
         if (actualMessages && actualMessages.length > 0) {
           updateHud(`Skipping ${conn.name} (prior chat history detected)...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
-          // Record as skipped
-          await chrome.storage.local.get(['sentHistory']).then(async res => {
-            const history = res.sentHistory || [];
-            const record = {
-              id: Date.now().toString(),
-              profileUrl: conn.profileUrl,
-              name: conn.name,
-              firstName: firstName,
-              message: '[Skipped - Existing Conversation]',
-              sentAt: new Date().toISOString(),
-              status: 'skipped'
-            };
-            await chrome.storage.local.set({ sentHistory: [record, ...history].slice(0, 500) });
-          });
-
+          // Record as skipped in storage
+          const local = await chrome.storage.local.get('sentHistory');
+          const history = local.sentHistory || [];
+          const record = {
+            id: Date.now().toString(),
+            profileUrl: conn.profileUrl,
+            name: conn.name,
+            firstName: firstName,
+            message: '[Skipped - Existing Conversation]',
+            sentAt: new Date().toISOString(),
+            status: 'skipped'
+          };
+          await chrome.storage.local.set({ sentHistory: [record, ...history].slice(0, 500) });
           sentMap.add(conn.profileUrl);
+
           closeConversationWindow(activeConvo);
           await sleep(1500);
           continue;
@@ -377,12 +440,12 @@ async function runAutoWelcomeSequence() {
 
       // Find text input
       let textBox = null;
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 15; i++) {
         textBox = activeConvo.querySelector(
           'div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], div[aria-label*="Write a message"]'
         );
         if (textBox) break;
-        await sleep(300);
+        await sleep(250);
       }
 
       if (!textBox) {
@@ -421,22 +484,26 @@ async function runAutoWelcomeSequence() {
         break;
       }
 
-      // Find send button and wait for it to be enabled
+      // Find send button and wait for it to become enabled
       let sendBtn = null;
-      for (let i = 0; i < 10; i++) {
-        sendBtn = activeConvo.querySelector('button.msg-form__send-button, button[type="submit"]');
+      for (let i = 0; i < 15; i++) {
+        sendBtn = activeConvo.querySelector(
+          'button.msg-form__send-button, button[type="submit"].msg-form__send-btn, button[type="submit"], button.msg-form__send-btn'
+        );
         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
           break;
         }
-        await sleep(300);
+        await sleep(250);
       }
 
       if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
         updateHud(`Sending message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        sendBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
         sendBtn.click();
         await sleep(2000);
 
-        // Record success directly
+        // Record success
         currentTodayCount++;
         processedInSession++;
         sentMap.add(conn.profileUrl);
