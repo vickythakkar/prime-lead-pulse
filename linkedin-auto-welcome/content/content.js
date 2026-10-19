@@ -300,75 +300,159 @@ function closeConversationWindow(convoEl) {
 
 /**
  * Type text into a React-controlled contenteditable div.
- * LinkedIn's message box is a React component. The only reliable way to
- * set text AND have React recognize it (so it enables the Send button) is
- * to simulate a clipboard paste event, which React's synthetic event system
- * processes correctly. execCommand / innerHTML / innerText all fail silently.
+ *
+ * LinkedIn uses React 18 which fully ignores:
+ *   - execCommand (deprecated, React bypasses it)
+ *   - innerHTML / textContent mutations
+ *   - ClipboardEvent with DataTransfer (clipboardData is read-only in real paste handlers)
+ *
+ * The ONLY reliable method is:
+ *   1. `beforeinput` InputEvent with inputType='insertText' — React's actual handler
+ *   2. Character-by-character `beforeinput` as the gold-standard fallback
+ *   3. React Fiber internal __reactFiber onChange trigger as last resort
  */
 async function typeIntoReactInput(element, text) {
-  if (!element) return false;
+  if (!element || !text) return false;
+
+  console.log('[LAW] typeIntoReactInput called, text length:', text.length);
 
   try {
+    // Step 1: Focus the element
     element.focus();
-    await sleep(200);
-
-    // Clear existing content first
-    element.innerHTML = '';
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    await sleep(150);
-
-    // Method 1: Clipboard paste simulation (most reliable for React)
-    const clipboardData = new DataTransfer();
-    clipboardData.setData('text/plain', text);
-
-    const pasteEvent = new ClipboardEvent('paste', {
-      bubbles: true,
-      cancelable: true,
-      clipboardData: clipboardData
-    });
-
-    element.dispatchEvent(pasteEvent);
     await sleep(300);
 
-    // Verify text was inserted
-    if (element.textContent && element.textContent.trim().length > 0) {
-      return true;
-    }
-
-    // Method 2: execCommand insertText (works in some environments)
-    element.focus();
-    const inserted = document.execCommand('insertText', false, text);
+    // Step 2: Select all & delete existing content via keyboard events
+    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', code: 'KeyA', ctrlKey: true, metaKey: false }));
+    await sleep(50);
+    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Delete', code: 'Delete' }));
+    element.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'deleteContentBackward' }));
+    element.textContent = '';
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
     await sleep(200);
 
-    if (element.textContent && element.textContent.trim().length > 0) {
-      return true;
-    }
+    // ── METHOD 1: Single `beforeinput` with full text (fastest) ──────────────
+    console.log('[LAW] Trying Method 1: beforeinput insertText (full string)');
+    element.focus();
+    await sleep(100);
 
-    // Method 3: Direct innerHTML + React fiber trick
-    element.innerHTML = `<p>${text}</p>`;
+    const beforeInputEvent = new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'insertText',
+      data: text,
+    });
+    const notCancelled = element.dispatchEvent(beforeInputEvent);
 
-    // Find and trigger React's internal onChange via the fiber
-    const reactFiberKey = Object.keys(element).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
-    if (reactFiberKey) {
-      let fiber = element[reactFiberKey];
-      while (fiber) {
-        const onChange = fiber.pendingProps?.onChange || fiber.memoizedProps?.onChange;
-        if (onChange) {
-          onChange({ target: element, currentTarget: element, bubbles: true });
-          break;
-        }
-        fiber = fiber.return;
+    if (notCancelled) {
+      // React may handle beforeinput but not mutate DOM — also set manually
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(document.createTextNode(text));
+        range.collapse(false);
+      } else {
+        element.textContent = text;
       }
     }
 
     element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    await sleep(300);
+    await sleep(400);
 
-    return element.textContent && element.textContent.trim().length > 0;
+    if (element.textContent && element.textContent.trim().length > 0) {
+      console.log('[LAW] Method 1 SUCCESS. Text:', element.textContent.trim().substring(0, 40));
+      return true;
+    }
+
+    // ── METHOD 2: Character-by-character beforeinput (gold standard) ─────────
+    console.log('[LAW] Method 1 failed. Trying Method 2: char-by-char beforeinput');
+    element.focus();
+    await sleep(100);
+    // Clear again
+    element.textContent = '';
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    await sleep(100);
+
+    for (const char of text) {
+      element.focus();
+      const bi = new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: char,
+      });
+      element.dispatchEvent(bi);
+
+      // Manually append the character too (React may not mutate DOM itself)
+      element.textContent = (element.textContent || '') + char;
+
+      element.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: char,
+      }));
+      await sleep(15);
+    }
+
+    await sleep(400);
+
+    if (element.textContent && element.textContent.trim().length > 0) {
+      console.log('[LAW] Method 2 SUCCESS. Text:', element.textContent.trim().substring(0, 40));
+      return true;
+    }
+
+    // ── METHOD 3: React Fiber internal onChange + execCommand ─────────────────
+    console.log('[LAW] Method 2 failed. Trying Method 3: React Fiber + execCommand');
+    element.focus();
+    await sleep(100);
+
+    // Use execCommand (may still work in some Chrome versions for contenteditable)
+    document.execCommand('selectAll', false);
+    document.execCommand('insertText', false, text);
+    await sleep(200);
+
+    if (element.textContent && element.textContent.trim().length > 0) {
+      console.log('[LAW] Method 3a execCommand SUCCESS');
+      return true;
+    }
+
+    // React Fiber: walk up to find onChange handler
+    element.innerHTML = `<p>${text}</p>`;
+    const reactFiberKey = Object.keys(element).find(k =>
+      k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance') || k.startsWith('__reactProps')
+    );
+
+    if (reactFiberKey) {
+      let fiber = element[reactFiberKey];
+      // If it's a props key, just call onChange directly
+      if (reactFiberKey.startsWith('__reactProps')) {
+        const props = element[reactFiberKey];
+        if (props && props.onChange) {
+          props.onChange({ target: element, currentTarget: element, nativeEvent: { data: text }, bubbles: true });
+          console.log('[LAW] Method 3b reactProps.onChange called');
+        }
+      } else {
+        while (fiber) {
+          const onChange = fiber.pendingProps?.onChange || fiber.memoizedProps?.onChange;
+          if (onChange) {
+            onChange({ target: element, currentTarget: element, nativeEvent: { data: text }, bubbles: true });
+            console.log('[LAW] Method 3b React Fiber onChange called');
+            break;
+          }
+          fiber = fiber.return;
+        }
+      }
+    }
+
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    await sleep(400);
+
+    const finalCheck = element.textContent && element.textContent.trim().length > 0;
+    console.log('[LAW] Method 3 result:', finalCheck, '| content:', element.textContent?.trim()?.substring(0, 40));
+    return finalCheck;
 
   } catch (err) {
-    console.error('typeIntoReactInput error:', err);
+    console.error('[LAW] typeIntoReactInput error:', err);
     return false;
   }
 }
@@ -517,15 +601,17 @@ async function runAutoWelcomeSequence() {
       let textBox = null;
       for (let i = 0; i < 15; i++) {
         textBox = activeConvo.querySelector(
-          'div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], div[aria-label*="Write a message"]'
+          'div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], div[aria-label*="Write a message"], div[aria-label*="message"]'
         );
         if (textBox) break;
         await sleep(250);
       }
 
       if (!textBox) {
+        updateHud(`⚠️ Couldn't find text box for ${firstName}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
         console.warn('Could not find text input for', conn.name);
         closeConversationWindow(activeConvo);
+        await sleep(1000);
         continue;
       }
 
@@ -534,22 +620,24 @@ async function runAutoWelcomeSequence() {
         .replace(/\{firstName\}/gi, firstName)
         .replace(/\{fullName\}/gi, conn.name);
 
-      updateHud(`Drafting message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      updateHud(`Found text box! Typing message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
 
       // Focus the textbox
       textBox.focus();
       await sleep(400);
 
       // --- REACT-COMPATIBLE TEXT INJECTION ---
-      // LinkedIn uses React which ignores execCommand. The only reliable method
-      // that triggers React's synthetic event system is a clipboard paste event.
       const typed = await typeIntoReactInput(textBox, personalizedMessage);
+
       if (!typed) {
+        updateHud(`⚠️ Could not type for ${firstName}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
         console.warn('Could not type message for', conn.name);
         closeConversationWindow(activeConvo);
+        await sleep(1000);
         continue;
       }
 
+      updateHud(`✏️ Message typed for ${firstName}! Finding send button...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
       await sleep(1200);
 
       if (shouldStop) {
@@ -566,8 +654,28 @@ async function runAutoWelcomeSequence() {
         if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
           break;
         }
+        if (sendBtn && i === 10) {
+          console.log('[LAW] Send button still disabled at 2.5s. aria-disabled:', sendBtn.getAttribute('aria-disabled'));
+          console.log('[LAW] textBox content:', textBox.textContent?.trim()?.substring(0, 60));
+          updateHud(`⏳ Waiting for send button to activate...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        }
         sendBtn = null;
         await sleep(250);
+      }
+
+      // If button is still disabled but text IS present, force-enable and click anyway
+      if (!sendBtn) {
+        const possibleBtn = activeConvo.querySelector(
+          'button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[type="submit"]'
+        );
+        const hasText = textBox.textContent && textBox.textContent.trim().length > 0;
+        if (possibleBtn && hasText) {
+          console.log('[LAW] Force-enabling send button. Text present:', textBox.textContent.trim().substring(0, 40));
+          updateHud(`⚡ Forcing send for ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+          possibleBtn.removeAttribute('aria-disabled');
+          possibleBtn.disabled = false;
+          sendBtn = possibleBtn;
+        }
       }
 
       if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
