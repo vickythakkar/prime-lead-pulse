@@ -99,12 +99,13 @@
                   <th>Recipient</th>
                   <th>Date & Time</th>
                   <th>Message Preview</th>
+                  <th>Rule Applied</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody id="overview-table-body">
                 <tr>
-                  <td colspan="4" class="text-center empty-cell">No messages sent yet.</td>
+                  <td colspan="5" class="text-center empty-cell">No messages sent yet.</td>
                 </tr>
               </tbody>
             </table>
@@ -114,11 +115,26 @@
 
       <!-- Section: Message Template -->
       <section id="section-template" class="content-section">
+        <!-- Card 1: Targeted Rules -->
         <div class="card">
           <div class="card-header">
             <div>
-              <h3>Welcome Message Template</h3>
-              <p class="card-desc">Personalize what gets sent to new connections. Dynamic tags will automatically be replaced with their real name.</p>
+              <h3>Targeted Rules (Keyword Matching)</h3>
+              <p class="card-desc">Send targeted messages based on keywords in headlines or job titles (e.g. "realtor, real estate, broker, USA").</p>
+            </div>
+            <button id="btn-dash-add-rule" class="btn btn-outline small">+ Add Keyword Rule</button>
+          </div>
+          <div class="dash-rules-container" id="dash-rules-container">
+            <!-- Dynamically rendered rules -->
+          </div>
+        </div>
+
+        <!-- Card 2: Default Template -->
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3>Default Welcome Message (Fallback)</h3>
+              <p class="card-desc">Sent to new connections who do not match any of the targeted keyword rules above.</p>
             </div>
             <div class="tags-group">
               <button class="tag-pill" data-insert="{firstName}">+ {firstName}</button>
@@ -126,15 +142,15 @@
             </div>
           </div>
           <div class="form-body">
-            <textarea id="dash-template-input" rows="5" class="code-textarea" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
+            <textarea id="dash-template-input" rows="4" class="code-textarea" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
             
             <div class="preview-panel">
-              <h4>Sample Preview:</h4>
+              <h4>Default Sample Preview:</h4>
               <p id="dash-template-preview" class="preview-text">Hi Sarah, thanks for connecting! Looking forward to staying in touch.</p>
             </div>
 
             <div class="form-actions">
-              <button id="btn-dash-save-template" class="btn btn-primary">Save Template</button>
+              <button id="btn-dash-save-template" class="btn btn-primary">Save All Templates & Rules</button>
             </div>
           </div>
         </div>
@@ -222,13 +238,14 @@
                   <th>Recipient Name</th>
                   <th>Date & Time</th>
                   <th>Message Body</th>
+                  <th>Rule Applied</th>
                   <th>Status</th>
                   <th>Profile Link</th>
                 </tr>
               </thead>
               <tbody id="logs-table-body">
                 <tr>
-                  <td colspan="5" class="text-center empty-cell">No history found.</td>
+                  <td colspan="6" class="text-center empty-cell">No history found.</td>
                 </tr>
               </tbody>
             </table>

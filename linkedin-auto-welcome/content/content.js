@@ -10,6 +10,14 @@ let hudElement = null;
 const DEFAULT_SETTINGS = {
   enabled: true,
   template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  rules: [
+    {
+      id: "rule_realtors",
+      name: "US Realtors & Real Estate",
+      keywords: "realtor, real estate, broker, realty, mortgage, agent, appraisal, investment, remax, keller williams, exp",
+      template: "Hi {firstName}, thanks for connecting! Always great to connect with fellow real estate professionals. How is the market treating you recently?"
+    }
+  ],
   dailyLimit: 15,
   minDelay: 25,
   maxDelay: 45,
@@ -61,7 +69,12 @@ async function getExtensionData() {
   try {
     const local = await chrome.storage.local.get(['settings', 'stats', 'sentHistory']);
     const today = getTodayString();
-    const settings = { ...DEFAULT_SETTINGS, ...(local.settings || {}) };
+    const rawSettings = local.settings || {};
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      ...rawSettings,
+      rules: Array.isArray(rawSettings.rules) ? rawSettings.rules : DEFAULT_SETTINGS.rules
+    };
     let stats = local.stats || { todayCount: 0, lastResetDate: today, totalSent: 0 };
     if (stats.lastResetDate !== today) {
       stats.todayCount = 0;
@@ -220,6 +233,15 @@ function getConnectionCards() {
       name = link.innerText || link.textContent || '';
     }
 
+    // Extract occupation / headline
+    let headline = '';
+    const occEl = card.querySelector(
+      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .artdeco-entity-lockup__caption, .mn-connection-card__details'
+    );
+    if (occEl) {
+      headline = (occEl.innerText || occEl.textContent || '').trim();
+    }
+
     // Clean name: take first line, separate joined lowercase-uppercase words (e.g. MyersRealtor -> Myers Realtor)
     name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
     name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
@@ -236,6 +258,7 @@ function getConnectionCards() {
       linkElement: link,
       messageButton: messageBtn,
       name: name,
+      headline: headline,
       profileUrl: profileUrl
     });
   }
@@ -261,12 +284,21 @@ function getConnectionCards() {
       const parts = name.split(' ').filter(w => w.length > 0);
       if (parts.length > 2) name = parts.slice(0, 2).join(' ');
 
+      let headline = '';
+      const occEl = card.querySelector(
+        '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .artdeco-entity-lockup__caption, .mn-connection-card__details'
+      );
+      if (occEl) {
+        headline = (occEl.innerText || occEl.textContent || '').trim();
+      }
+
       seenUrls.add(profileUrl);
       cards.push({
         cardElement: card,
         linkElement: link,
         messageButton: btn,
         name: name || 'LinkedIn Member',
+        headline: headline,
         profileUrl: profileUrl
       });
     }
@@ -572,6 +604,56 @@ function findSendButton(container, textBox) {
   return null;
 }
 
+// Test if text contains a specific keyword (supports whole-word and phrase matching)
+function matchKeyword(text, keyword) {
+  if (!text || !keyword) return false;
+  const trimmed = keyword.trim().toLowerCase();
+  if (!trimmed) return false;
+
+  try {
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const reg = new RegExp('\\b' + escaped + '\\b', 'i');
+    return reg.test(text);
+  } catch (e) {
+    return text.toLowerCase().includes(trimmed);
+  }
+}
+
+// Select appropriate template based on keyword rules
+function selectTemplate(conn, settings, convoContainer) {
+  const rules = Array.isArray(settings.rules) ? settings.rules : [];
+
+  // Gather all available context for this person: card, headline, profile, chat header
+  const contextParts = [
+    conn.name || '',
+    conn.headline || '',
+    conn.cardElement ? (conn.cardElement.innerText || conn.cardElement.textContent || '') : '',
+    convoContainer ? (convoContainer.innerText || convoContainer.textContent || '') : ''
+  ];
+  const searchableText = contextParts.join(' ').toLowerCase();
+
+  for (const rule of rules) {
+    if (!rule.keywords || !rule.template) continue;
+    const keywords = rule.keywords.split(',').map(k => k.trim()).filter(Boolean);
+    for (const kw of keywords) {
+      if (matchKeyword(searchableText, kw)) {
+        console.log(`[LAW] Matched rule "${rule.name}" via keyword "${kw}" for ${conn.name}`);
+        return {
+          template: rule.template,
+          ruleName: rule.name || 'Keyword Rule',
+          matchedKeyword: kw
+        };
+      }
+    }
+  }
+
+  return {
+    template: settings.template || DEFAULT_SETTINGS.template,
+    ruleName: 'Default',
+    matchedKeyword: null
+  };
+}
+
 // Main Automation Sequence
 async function runAutoWelcomeSequence() {
   if (isRunning) return;
@@ -710,6 +792,7 @@ async function runAutoWelcomeSequence() {
             name: conn.name,
             firstName: firstName,
             message: '[Skipped - Existing Conversation]',
+            ruleMatched: 'Skipped',
             sentAt: new Date().toISOString(),
             status: 'skipped'
           };
@@ -724,12 +807,17 @@ async function runAutoWelcomeSequence() {
         }
       }
 
-      // Prepare personalized message
-      const personalizedMessage = (settings.template || '')
+      // Select template (keyword rule matching or default fallback)
+      const ruleResult = selectTemplate(conn, settings, activeConvo);
+      const personalizedMessage = (ruleResult.template || settings.template || '')
         .replace(/\{firstName\}/gi, firstName)
         .replace(/\{fullName\}/gi, conn.name);
 
-      updateHud(`Found chat! Typing message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      if (ruleResult.ruleName !== 'Default') {
+        updateHud(`🎯 Matched "${ruleResult.ruleName}" (${ruleResult.matchedKeyword})! Typing message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      } else {
+        updateHud(`Found chat! Typing default message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      }
 
       // Type the message into the Draft.js editor
       const typed = await typeIntoReactInput(textBox, personalizedMessage);
@@ -801,6 +889,7 @@ async function runAutoWelcomeSequence() {
             name: conn.name,
             firstName: firstName,
             message: personalizedMessage,
+            ruleMatched: ruleResult.ruleName !== 'Default' ? `${ruleResult.ruleName} [${ruleResult.matchedKeyword}]` : 'Default',
             sentAt: new Date().toISOString(),
             status: 'sent'
           };

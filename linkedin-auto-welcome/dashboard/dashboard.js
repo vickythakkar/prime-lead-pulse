@@ -6,6 +6,14 @@
 const DEFAULT_SETTINGS = {
   enabled: true,
   template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  rules: [
+    {
+      id: "rule_realtors",
+      name: "US Realtors & Real Estate",
+      keywords: "realtor, real estate, broker, realty, mortgage, agent, appraisal, investment, remax, keller williams, exp",
+      template: "Hi {firstName}, thanks for connecting! Always great to connect with fellow real estate professionals. How is the market treating you recently?"
+    }
+  ],
   dailyLimit: 15,
   minDelay: 25,
   maxDelay: 45,
@@ -41,7 +49,10 @@ function initDashboard() {
   const dashTemplateInput = document.getElementById('dash-template-input');
   const dashTemplatePreview = document.getElementById('dash-template-preview');
   const btnDashSaveTemplate = document.getElementById('btn-dash-save-template');
-  const tagPills = document.querySelectorAll('.tag-pill');
+  const tagPills = document.querySelectorAll('.tag-pill:not(.dash-rule-tag-pill)');
+  const dashRulesContainer = document.getElementById('dash-rules-container');
+  const btnDashAddRule = document.getElementById('btn-dash-add-rule');
+  let currentDashRules = [];
 
   // Safety Settings Form
   const dashSettingDaily = document.getElementById('dash-setting-daily');
@@ -96,12 +107,97 @@ function initDashboard() {
     return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   }
 
+  function renderDashRules(rules) {
+    if (!dashRulesContainer) return;
+    dashRulesContainer.innerHTML = '';
+
+    if (!rules || rules.length === 0) {
+      dashRulesContainer.innerHTML = '<div class="empty-cell text-center" style="padding: 24px;">No keyword rules configured. Click "+ Add Keyword Rule" above to create targeted messages for realtors, executives, etc.</div>';
+      return;
+    }
+
+    rules.forEach((rule, idx) => {
+      const card = document.createElement('div');
+      card.className = 'dash-rule-card';
+      card.dataset.id = rule.id || `rule_${idx}`;
+
+      card.innerHTML = `
+        <div class="dash-rule-header">
+          <input type="text" class="dash-rule-name-input" placeholder="Rule Name (e.g. US Realtors & Real Estate)" value="${escapeHtml(rule.name || '')}">
+          <button type="button" class="dash-rule-delete-btn" data-delete-idx="${idx}" title="Delete Rule">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            Delete Rule
+          </button>
+        </div>
+        <div>
+          <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Match Keywords (comma-separated, case-insensitive):</label>
+          <input type="text" class="dash-rule-keywords-input" placeholder="e.g. realtor, real estate, broker, realty, mortgage, USA" value="${escapeHtml(rule.keywords || '')}">
+        </div>
+        <div>
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+            <label style="font-size: 12px; font-weight: 600; color: #475569;">Targeted Message Template:</label>
+            <div class="tags-group">
+              <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{firstName}">+ {firstName}</button>
+              <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{fullName}">+ {fullName}</button>
+            </div>
+          </div>
+          <textarea class="code-textarea dash-rule-template-input" rows="3" placeholder="Message to send when keywords match...">${escapeHtml(rule.template || '')}</textarea>
+        </div>
+      `;
+
+      dashRulesContainer.appendChild(card);
+    });
+
+    // Rule tag buttons
+    dashRulesContainer.querySelectorAll('.dash-rule-tag-pill').forEach(pill => {
+      pill.addEventListener('click', (e) => {
+        e.preventDefault();
+        const tag = pill.dataset.tag;
+        const card = pill.closest('.dash-rule-card');
+        const textarea = card?.querySelector('.dash-rule-template-input');
+        if (textarea) {
+          const start = textarea.selectionStart ?? textarea.value.length;
+          const end = textarea.selectionEnd ?? textarea.value.length;
+          textarea.value = textarea.value.substring(0, start) + tag + textarea.value.substring(end);
+          textarea.focus();
+          textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+        }
+      });
+    });
+
+    // Delete buttons
+    dashRulesContainer.querySelectorAll('.dash-rule-delete-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const delIdx = parseInt(btn.dataset.deleteIdx, 10);
+        const current = collectDashRulesFromDom();
+        current.splice(delIdx, 1);
+        currentDashRules = current;
+        renderDashRules(currentDashRules);
+      });
+    });
+  }
+
+  function collectDashRulesFromDom() {
+    if (!dashRulesContainer) return currentDashRules;
+    const cards = dashRulesContainer.querySelectorAll('.dash-rule-card');
+    const rules = [];
+    cards.forEach((card, idx) => {
+      const id = card.dataset.id || `rule_${Date.now()}_${idx}`;
+      const name = card.querySelector('.dash-rule-name-input')?.value.trim() || `Rule ${idx + 1}`;
+      const keywords = card.querySelector('.dash-rule-keywords-input')?.value.trim() || '';
+      const template = card.querySelector('.dash-rule-template-input')?.value.trim() || '';
+      rules.push({ id, name, keywords, template });
+    });
+    return rules;
+  }
+
   function renderTables(history) {
     currentHistoryData = history || [];
 
     if (!history || history.length === 0) {
-      if (overviewTableBody) overviewTableBody.innerHTML = '<tr><td colspan="4" class="text-center empty-cell">No messages sent yet. Newly accepted connections will appear here.</td></tr>';
-      if (logsTableBody) logsTableBody.innerHTML = '<tr><td colspan="5" class="text-center empty-cell">No history found.</td></tr>';
+      if (overviewTableBody) overviewTableBody.innerHTML = '<tr><td colspan="5" class="text-center empty-cell">No messages sent yet. Newly accepted connections will appear here.</td></tr>';
+      if (logsTableBody) logsTableBody.innerHTML = '<tr><td colspan="6" class="text-center empty-cell">No history found.</td></tr>';
       return;
     }
 
@@ -111,10 +207,14 @@ function initDashboard() {
       history.slice(0, 5).forEach(item => {
         const tr = document.createElement('tr');
         const isSent = item.status === 'sent';
+        const ruleName = item.ruleMatched || 'Default';
+        const isRule = ruleName !== 'Default' && ruleName !== 'Skipped';
+
         tr.innerHTML = `
           <td><strong>${escapeHtml(item.name || 'Member')}</strong></td>
           <td>${formatDate(item.sentAt)}</td>
-          <td style="max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(item.message)}</td>
+          <td style="max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
+          <td><span class="badge ${isRule ? 'rule-pill' : 'default-pill'}">${escapeHtml(ruleName)}</span></td>
           <td><span class="badge ${isSent ? 'sent' : 'skipped'}">${isSent ? 'Sent' : 'Skipped'}</span></td>
         `;
         overviewTableBody.appendChild(tr);
@@ -127,10 +227,14 @@ function initDashboard() {
       history.forEach(item => {
         const tr = document.createElement('tr');
         const isSent = item.status === 'sent';
+        const ruleName = item.ruleMatched || 'Default';
+        const isRule = ruleName !== 'Default' && ruleName !== 'Skipped';
+
         tr.innerHTML = `
           <td><strong>${escapeHtml(item.name || 'Member')}</strong></td>
           <td>${formatDate(item.sentAt)}</td>
-          <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
+          <td style="max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
+          <td><span class="badge ${isRule ? 'rule-pill' : 'default-pill'}">${escapeHtml(ruleName)}</span></td>
           <td><span class="badge ${isSent ? 'sent' : 'skipped'}">${isSent ? 'Sent' : 'Skipped'}</span></td>
           <td><a href="${item.profileUrl || '#'}" target="_blank" style="color: #0a66c2; font-weight: 500;">View Profile ↗</a></td>
         `;
@@ -207,22 +311,56 @@ function initDashboard() {
     });
   }
 
+  // Add Keyword Rule button
+  if (btnDashAddRule) {
+    btnDashAddRule.addEventListener('click', (e) => {
+      e.preventDefault();
+      const current = collectDashRulesFromDom();
+      current.push({
+        id: `rule_${Date.now()}`,
+        name: `Target Rule ${current.length + 1}`,
+        keywords: "",
+        template: "Hi {firstName}, thanks for connecting!"
+      });
+      currentDashRules = current;
+      renderDashRules(currentDashRules);
+      const lastCard = dashRulesContainer?.lastElementChild;
+      lastCard?.querySelector('.dash-rule-keywords-input')?.focus();
+    });
+  }
+
   // Save Template
   if (btnDashSaveTemplate) {
     btnDashSaveTemplate.addEventListener('click', async (e) => {
       e.preventDefault();
       const template = dashTemplateInput.value.trim();
       if (!template) {
-        showToast('Template cannot be empty');
+        showToast('Default template cannot be empty');
         return;
       }
+      const rules = collectDashRulesFromDom();
+
+      // Validate rules
+      for (const r of rules) {
+        if (!r.keywords && !r.template) continue;
+        if (r.keywords && !r.template) {
+          showToast(`Please enter a message for rule: ${r.name}`);
+          return;
+        }
+        if (!r.keywords && r.template) {
+          showToast(`Please enter keywords for rule: ${r.name}`);
+          return;
+        }
+      }
+
       try {
         const { settings = {} } = await chrome.storage.local.get('settings');
-        const updated = { ...DEFAULT_SETTINGS, ...settings, template };
+        const updated = { ...DEFAULT_SETTINGS, ...settings, template, rules };
         await chrome.storage.local.set({ settings: updated });
-        showToast('Template saved successfully!');
+        currentDashRules = rules;
+        showToast('Templates & rules saved successfully!');
       } catch (err) {
-        showToast('Error saving template');
+        showToast('Error saving templates');
       }
     });
   }
@@ -341,11 +479,12 @@ function initDashboard() {
         return;
       }
 
-      const headers = ['Name', 'Profile URL', 'Sent At', 'Status', 'Message'];
+      const headers = ['Name', 'Profile URL', 'Sent At', 'Rule Applied', 'Status', 'Message'];
       const rows = currentHistoryData.map(item => [
         `"${(item.name || '').replace(/"/g, '""')}"`,
         `"${(item.profileUrl || '').replace(/"/g, '""')}"`,
         `"${(item.sentAt || '').replace(/"/g, '""')}"`,
+        `"${(item.ruleMatched || 'Default').replace(/"/g, '""')}"`,
         `"${(item.status || '').replace(/"/g, '""')}"`,
         `"${(item.message || '').replace(/"/g, '""')}"`
       ]);
@@ -420,6 +559,13 @@ function initDashboard() {
       if (dashTemplateInput && document.activeElement !== dashTemplateInput) {
         dashTemplateInput.value = settings.template || DEFAULT_SETTINGS.template;
         updatePreview();
+      }
+
+      // Render Rules if not currently editing them
+      const isEditingRules = dashRulesContainer && dashRulesContainer.contains(document.activeElement);
+      if (!isEditingRules) {
+        currentDashRules = Array.isArray(settings.rules) ? settings.rules : DEFAULT_SETTINGS.rules;
+        renderDashRules(currentDashRules);
       }
 
       if (dashSettingDaily && document.activeElement !== dashSettingDaily) {

@@ -71,23 +71,42 @@
 
     <!-- Tab 1: Template Editor -->
     <div class="tab-pane active" id="pane-template">
+      <!-- Section 1: Targeted Rules -->
+      <div class="rules-section-header">
+        <div>
+          <span class="section-heading">Targeted Rules (Keywords)</span>
+          <div style="font-size: 11px; color: #64748b;">Custom message for realtors, titles, etc.</div>
+        </div>
+        <button type="button" id="btn-add-rule" class="btn-add-rule">+ Add Rule</button>
+      </div>
+
+      <div class="rules-container" id="popup-rules-container">
+        <!-- Dynamically injected rules -->
+      </div>
+
+      <hr class="rules-divider">
+
+      <!-- Section 2: Default Message -->
       <div class="form-group">
         <div class="form-header">
-          <label for="template-input">Welcome Message</label>
+          <div>
+            <label for="template-input">Default Message</label>
+            <div style="font-size: 11px; color: #64748b;">Sent if no keyword rules match</div>
+          </div>
           <div class="variable-tags">
             <button type="button" class="tag-btn" data-insert="{firstName}">+ {firstName}</button>
             <button type="button" class="tag-btn" data-insert="{fullName}">+ {fullName}</button>
           </div>
         </div>
-        <textarea id="template-input" rows="4" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
+        <textarea id="template-input" rows="3" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
       </div>
 
       <div class="preview-box">
-        <span class="preview-label">Live Preview:</span>
+        <span class="preview-label">Default Live Preview:</span>
         <p id="template-preview" class="preview-content">Hi Sarah, thanks for connecting! Looking forward to staying in touch.</p>
       </div>
 
-      <button id="btn-save-template" class="btn btn-secondary">Save Template</button>
+      <button id="btn-save-template" class="btn btn-secondary">Save All Templates & Rules</button>
     </div>
 
     <!-- Tab 2: Settings -->

@@ -6,6 +6,14 @@
 const DEFAULT_SETTINGS = {
   enabled: true,
   template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  rules: [
+    {
+      id: "rule_realtors",
+      name: "US Realtors & Real Estate",
+      keywords: "realtor, real estate, broker, realty, mortgage, agent, appraisal, investment, remax, keller williams, exp",
+      template: "Hi {firstName}, thanks for connecting! Always great to connect with fellow real estate professionals. How is the market treating you recently?"
+    }
+  ],
   dailyLimit: 15,
   minDelay: 25,       // min delay between sends in seconds
   maxDelay: 45,       // max delay between sends in seconds
@@ -40,7 +48,12 @@ async function getStorageData() {
     await chrome.storage.local.set({ stats });
   }
 
-  const settings = { ...DEFAULT_SETTINGS, ...(result.settings || {}) };
+  const rawSettings = result.settings || {};
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    ...rawSettings,
+    rules: Array.isArray(rawSettings.rules) ? rawSettings.rules : DEFAULT_SETTINGS.rules
+  };
   const sentHistory = result.sentHistory || [];
   const runtimeState = result.runtimeState || {
     isProcessing: false,
@@ -144,6 +157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           name: message.payload.name,
           firstName: message.payload.firstName,
           message: message.payload.message,
+          ruleMatched: message.payload.ruleMatched || 'Default',
           sentAt: new Date().toISOString(),
           status: message.payload.status || 'sent'
         };

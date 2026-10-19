@@ -530,3 +530,83 @@ input:checked + .slider:before {
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
   transition: opacity 0.3s;
 }
+
+/* Dashboard Targeted Rules */
+.dash-rules-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+}
+
+.dash-rule-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dash-rule-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dash-rule-name-input {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 12px;
+  flex: 1;
+  background: #ffffff;
+}
+
+.dash-rule-keywords-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: #ffffff;
+}
+
+.dash-rule-delete-btn {
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  color: #dc2626;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.dash-rule-delete-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.badge.rule-pill {
+  background: #e0f2fe;
+  color: #0369a1;
+  font-weight: 600;
+  border: 1px solid #bae6fd;
+}
+
+.badge.default-pill {
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 500;
+  border: 1px solid #cbd5e1;
+}
+

@@ -555,3 +555,116 @@ input:checked + .slider:before {
   50% { transform: scale(1.15); opacity: 1; }
   100% { transform: scale(0.95); opacity: 0.7; }
 }
+
+/* Targeted Rules in Popup */
+.rules-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.section-heading {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.btn-add-rule {
+  background: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-add-rule:hover {
+  background: #0a66c2;
+  color: #ffffff;
+}
+
+.rules-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 230px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  padding-right: 2px;
+}
+
+.rule-card {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rule-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.rule-name-input {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 4px 8px;
+  flex: 1;
+  background: #ffffff;
+}
+
+.rule-delete-btn {
+  background: transparent;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+}
+
+.rule-delete-btn:hover {
+  background: #fee2e2;
+}
+
+.sub-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.rule-keywords-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: #ffffff;
+}
+
+.rule-card textarea {
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
+.rules-divider {
+  border: none;
+  border-top: 1px dashed #cbd5e1;
+  margin: 10px 0;
+}
+

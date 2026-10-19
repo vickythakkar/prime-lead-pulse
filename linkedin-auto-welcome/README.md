@@ -9,15 +9,16 @@ Designed for safety, zero platform ban risk, and complete customization. Wheneve
 ## 🌟 Key Features
 
 * **100% Free & Self-Hosted:** No monthly subscriptions, no proxy costs, and no third-party APIs.
+* **Keyword-Based Conditional Messaging:** Configure targeted rules based on job title, industry, or location keywords (e.g. realtors in USA). If a connection matches your keywords, it sends a targeted template; otherwise, it seamlessly falls back to your default template!
 * **Dual Dashboard Interface:**
-  * **Toolbar Popup:** Quick controls, live daily progress bar, and instant scan button.
-  * **Full-Page Command Center:** Dedicated options dashboard with in-depth stats and CSV export.
+  * **Toolbar Popup:** Quick controls, live daily progress bar, targeted rules editor, and instant scan button.
+  * **Full-Page Command Center:** Dedicated options dashboard with multi-rule editor, in-depth stats, and CSV export.
 * **Smart Dynamic Placeholders:** Supports `{firstName}` and `{fullName}` tags with smart honorific and title stripping (e.g. cleans "Dr. John Doe, MBA" into "John").
 * **Human-Like Safety Delays:** Configurable randomized pauses (default: 25–45 seconds) between messages so your activity mirrors genuine human behavior.
 * **Daily Quota Safety Cap:** Strict daily send limit (default: 15 messages/day) to keep your account safe from LinkedIn spam algorithms.
 * **Duplicate Prevention:** Tracks all sent connections in local storage; never messages the same person twice.
 * **Chat History Detection:** Automatically skips connections if an existing conversation thread already exists.
-* **Live In-Page HUD:** A discreet on-screen status widget on LinkedIn showing current progress, countdown timers, and an instant emergency stop button.
+* **Live In-Page HUD:** A discreet on-screen status widget on LinkedIn showing current progress, countdown timers, which rule matched, and an instant emergency stop button.
 
 ---
 

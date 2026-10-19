@@ -6,6 +6,14 @@
 const DEFAULT_SETTINGS = {
   enabled: true,
   template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  rules: [
+    {
+      id: "rule_realtors",
+      name: "US Realtors & Real Estate",
+      keywords: "realtor, real estate, broker, realty, mortgage, agent, appraisal, investment, remax, keller williams, exp",
+      template: "Hi {firstName}, thanks for connecting! Always great to connect with fellow real estate professionals. How is the market treating you recently?"
+    }
+  ],
   dailyLimit: 15,
   minDelay: 25,
   maxDelay: 45,
@@ -37,7 +45,10 @@ function initPopup() {
   const templateInput = document.getElementById('template-input');
   const templatePreview = document.getElementById('template-preview');
   const btnSaveTemplate = document.getElementById('btn-save-template');
-  const tagButtons = document.querySelectorAll('.tag-btn');
+  const tagButtons = document.querySelectorAll('.tag-btn:not(.rule-tag-btn)');
+  const popupRulesContainer = document.getElementById('popup-rules-container');
+  const btnAddRule = document.getElementById('btn-add-rule');
+  let currentRules = [];
 
   // Settings tab
   const settingDailyLimit = document.getElementById('setting-daily-limit');
@@ -83,6 +94,90 @@ function initPopup() {
     }[m]));
   }
 
+  function renderRules(rules) {
+    if (!popupRulesContainer) return;
+    popupRulesContainer.innerHTML = '';
+
+    if (!rules || rules.length === 0) {
+      popupRulesContainer.innerHTML = '<div class="empty-state" style="padding: 10px;">No targeted rules yet. Add a rule to send custom messages to Realtors, CEOs, etc.</div>';
+      return;
+    }
+
+    rules.forEach((rule, idx) => {
+      const card = document.createElement('div');
+      card.className = 'rule-card';
+      card.dataset.id = rule.id || `rule_${idx}`;
+
+      card.innerHTML = `
+        <div class="rule-card-header">
+          <input type="text" class="rule-name-input" placeholder="Rule Name (e.g. US Realtors)" value="${escapeHtml(rule.name || '')}">
+          <button type="button" class="rule-delete-btn" title="Delete Rule" data-delete-idx="${idx}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          </button>
+        </div>
+        <div>
+          <div class="sub-label">Keywords (comma-separated):</div>
+          <input type="text" class="rule-keywords-input" placeholder="e.g. realtor, real estate, broker, USA" value="${escapeHtml(rule.keywords || '')}">
+        </div>
+        <div>
+          <div class="form-header" style="margin-bottom: 4px;">
+            <div class="sub-label">Message Template:</div>
+            <div class="variable-tags">
+              <button type="button" class="tag-btn rule-tag-btn" data-tag="{firstName}">+ {firstName}</button>
+              <button type="button" class="tag-btn rule-tag-btn" data-tag="{fullName}">+ {fullName}</button>
+            </div>
+          </div>
+          <textarea class="rule-template-input" rows="3" placeholder="Message template for this rule">${escapeHtml(rule.template || '')}</textarea>
+        </div>
+      `;
+
+      popupRulesContainer.appendChild(card);
+    });
+
+    // Wire up rule-specific tag buttons
+    popupRulesContainer.querySelectorAll('.rule-tag-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const tag = btn.dataset.tag;
+        const card = btn.closest('.rule-card');
+        const textarea = card?.querySelector('.rule-template-input');
+        if (textarea) {
+          const start = textarea.selectionStart ?? textarea.value.length;
+          const end = textarea.selectionEnd ?? textarea.value.length;
+          textarea.value = textarea.value.substring(0, start) + tag + textarea.value.substring(end);
+          textarea.focus();
+          textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+        }
+      });
+    });
+
+    // Wire up delete buttons
+    popupRulesContainer.querySelectorAll('.rule-delete-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const delIdx = parseInt(btn.dataset.deleteIdx, 10);
+        const current = collectRulesFromDom();
+        current.splice(delIdx, 1);
+        currentRules = current;
+        renderRules(currentRules);
+      });
+    });
+  }
+
+  function collectRulesFromDom() {
+    if (!popupRulesContainer) return currentRules;
+    const cards = popupRulesContainer.querySelectorAll('.rule-card');
+    const rules = [];
+    cards.forEach((card, idx) => {
+      const id = card.dataset.id || `rule_${Date.now()}_${idx}`;
+      const name = card.querySelector('.rule-name-input')?.value.trim() || `Rule ${idx + 1}`;
+      const keywords = card.querySelector('.rule-keywords-input')?.value.trim() || '';
+      const template = card.querySelector('.rule-template-input')?.value.trim() || '';
+      rules.push({ id, name, keywords, template });
+    });
+    return rules;
+  }
+
   function renderLogs(history) {
     if (!logsList || !logsCount) return;
     if (!history || history.length === 0) {
@@ -100,11 +195,12 @@ function initPopup() {
 
       const timeStr = item.sentAt ? new Date(item.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
       const isSent = item.status === 'sent';
+      const ruleText = item.ruleMatched ? ` • ${escapeHtml(item.ruleMatched)}` : '';
 
       row.innerHTML = `
         <div style="overflow: hidden; max-width: 220px;">
           <a href="${item.profileUrl || '#'}" target="_blank" class="log-name">${escapeHtml(item.name || 'Member')}</a>
-          <div class="log-time">${timeStr}</div>
+          <div class="log-time">${timeStr}${ruleText}</div>
         </div>
         <span class="log-badge ${isSent ? 'sent' : 'skipped'}">${isSent ? 'Sent' : 'Skipped'}</span>
       `;
@@ -164,22 +260,56 @@ function initPopup() {
     });
   }
 
+  // Add Rule button
+  if (btnAddRule) {
+    btnAddRule.addEventListener('click', (e) => {
+      e.preventDefault();
+      const current = collectRulesFromDom();
+      current.push({
+        id: `rule_${Date.now()}`,
+        name: `Target Rule ${current.length + 1}`,
+        keywords: "",
+        template: "Hi {firstName}, thanks for connecting!"
+      });
+      currentRules = current;
+      renderRules(currentRules);
+      const lastCard = popupRulesContainer?.lastElementChild;
+      lastCard?.querySelector('.rule-keywords-input')?.focus();
+    });
+  }
+
   // Save Template button
   if (btnSaveTemplate) {
     btnSaveTemplate.addEventListener('click', async (e) => {
       e.preventDefault();
       const template = templateInput.value.trim();
       if (!template) {
-        showToast('Template cannot be empty');
+        showToast('Default template cannot be empty');
         return;
       }
+      const rules = collectRulesFromDom();
+
+      // Validate rules
+      for (const r of rules) {
+        if (!r.keywords && !r.template) continue;
+        if (r.keywords && !r.template) {
+          showToast(`Please enter a message for rule: ${r.name}`);
+          return;
+        }
+        if (!r.keywords && r.template) {
+          showToast(`Please enter keywords for rule: ${r.name}`);
+          return;
+        }
+      }
+
       try {
         const { settings = {} } = await chrome.storage.local.get('settings');
-        const updated = { ...DEFAULT_SETTINGS, ...settings, template };
+        const updated = { ...DEFAULT_SETTINGS, ...settings, template, rules };
         await chrome.storage.local.set({ settings: updated });
-        showToast('Template saved successfully!');
+        currentRules = rules;
+        showToast('Templates & rules saved!');
       } catch (err) {
-        showToast('Error saving template');
+        showToast('Error saving templates');
       }
     });
   }
@@ -371,6 +501,13 @@ function initPopup() {
       if (templateInput && document.activeElement !== templateInput) {
         templateInput.value = settings.template || DEFAULT_SETTINGS.template;
         updatePreview();
+      }
+
+      // Rules rendering
+      const isEditingRules = popupRulesContainer && popupRulesContainer.contains(document.activeElement);
+      if (!isEditingRules) {
+        currentRules = Array.isArray(settings.rules) ? settings.rules : DEFAULT_SETTINGS.rules;
+        renderRules(currentRules);
       }
 
       if (settingDailyLimit && document.activeElement !== settingDailyLimit) {
