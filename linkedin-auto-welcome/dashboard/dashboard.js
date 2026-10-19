@@ -1,8 +1,24 @@
 /**
  * LinkedIn Auto Welcome & Responder - Full Dashboard Logic
+ * Robust, synchronous event binding with direct storage access.
  */
 
-document.addEventListener('DOMContentLoaded', async () => {
+const DEFAULT_SETTINGS = {
+  enabled: true,
+  template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  dailyLimit: 15,
+  minDelay: 25,
+  maxDelay: 45,
+  skipExistingChats: true,
+  autoScanInterval: 60
+};
+
+function getTodayString() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function initDashboard() {
   // Navigation
   const navItems = document.querySelectorAll('.nav-item');
   const sections = document.querySelectorAll('.content-section');
@@ -43,16 +59,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   const toast = document.getElementById('dash-toast');
 
   let currentHistoryData = [];
+  let toastTimeout = null;
 
   function showToast(msg) {
+    if (!toast) return;
     toast.textContent = msg;
     toast.classList.remove('hidden');
-    setTimeout(() => {
+    clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => {
       toast.classList.add('hidden');
     }, 2500);
   }
 
   function updatePreview() {
+    if (!dashTemplateInput || !dashTemplatePreview) return;
     const raw = dashTemplateInput.value || '';
     const sample = raw
       .replace(/\{firstName\}/gi, 'Sarah')
@@ -79,106 +99,49 @@ document.addEventListener('DOMContentLoaded', async () => {
   function renderTables(history) {
     currentHistoryData = history || [];
 
-    // Overview Table (Top 5)
     if (!history || history.length === 0) {
-      overviewTableBody.innerHTML = '<tr><td colspan="4" class="text-center empty-cell">No messages sent yet. Newly accepted connections will appear here.</td></tr>';
-      logsTableBody.innerHTML = '<tr><td colspan="5" class="text-center empty-cell">No history found.</td></tr>';
+      if (overviewTableBody) overviewTableBody.innerHTML = '<tr><td colspan="4" class="text-center empty-cell">No messages sent yet. Newly accepted connections will appear here.</td></tr>';
+      if (logsTableBody) logsTableBody.innerHTML = '<tr><td colspan="5" class="text-center empty-cell">No history found.</td></tr>';
       return;
     }
 
-    // Top 5
-    overviewTableBody.innerHTML = '';
-    history.slice(0, 5).forEach(item => {
-      const tr = document.createElement('tr');
-      const isSent = item.status === 'sent';
-      tr.innerHTML = `
-        <td><strong>${escapeHtml(item.name || 'Member')}</strong></td>
-        <td>${formatDate(item.sentAt)}</td>
-        <td style="max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(item.message)}</td>
-        <td><span class="badge ${isSent ? 'sent' : 'skipped'}">${isSent ? 'Sent' : 'Skipped'}</span></td>
-      `;
-      overviewTableBody.appendChild(tr);
-    });
+    // Top 5 on Overview
+    if (overviewTableBody) {
+      overviewTableBody.innerHTML = '';
+      history.slice(0, 5).forEach(item => {
+        const tr = document.createElement('tr');
+        const isSent = item.status === 'sent';
+        tr.innerHTML = `
+          <td><strong>${escapeHtml(item.name || 'Member')}</strong></td>
+          <td>${formatDate(item.sentAt)}</td>
+          <td style="max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(item.message)}</td>
+          <td><span class="badge ${isSent ? 'sent' : 'skipped'}">${isSent ? 'Sent' : 'Skipped'}</span></td>
+        `;
+        overviewTableBody.appendChild(tr);
+      });
+    }
 
-    // Complete Table
-    logsTableBody.innerHTML = '';
-    history.forEach(item => {
-      const tr = document.createElement('tr');
-      const isSent = item.status === 'sent';
-      tr.innerHTML = `
-        <td><strong>${escapeHtml(item.name || 'Member')}</strong></td>
-        <td>${formatDate(item.sentAt)}</td>
-        <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
-        <td><span class="badge ${isSent ? 'sent' : 'skipped'}">${isSent ? 'Sent' : 'Skipped'}</span></td>
-        <td><a href="${item.profileUrl || '#'}" target="_blank" style="color: #0a66c2; font-weight: 500;">View Profile ↗</a></td>
-      `;
-      logsTableBody.appendChild(tr);
-    });
-  }
-
-  async function loadDashboard() {
-    try {
-      const response = await chrome.runtime.sendMessage({ action: 'GET_DATA' });
-      if (!response || !response.success) return;
-
-      const { settings, stats, sentHistory, runtimeState } = response.data;
-
-      // Master switch
-      dashMasterToggle.checked = Boolean(settings.enabled);
-
-      // Stats
-      statToday.textContent = stats.todayCount || 0;
-      statTodaySub.textContent = `Daily limit: ${settings.dailyLimit || 15}`;
-      statTotal.textContent = stats.totalSent || 0;
-
-      if (!settings.enabled) {
-        statStatus.textContent = 'Paused';
-        statStatus.style.color = '#64748b';
-      } else if (runtimeState.isProcessing) {
-        statStatus.textContent = 'In Progress';
-        statStatus.style.color = '#f59e0b';
-        btnDashScan.classList.add('hidden');
-        btnDashStop.classList.remove('hidden');
-      } else {
-        statStatus.textContent = 'Ready';
-        statStatus.style.color = '#10b981';
-        btnDashScan.classList.remove('hidden');
-        btnDashStop.classList.add('hidden');
-      }
-
-      statLastRun.textContent = runtimeState.lastRunTime ? `Last run: ${formatDate(runtimeState.lastRunTime)}` : 'Last run: Never';
-
-      // Template form
-      if (document.activeElement !== dashTemplateInput) {
-        dashTemplateInput.value = settings.template || '';
-        updatePreview();
-      }
-
-      // Settings form
-      if (document.activeElement !== dashSettingDaily) {
-        dashSettingDaily.value = settings.dailyLimit || 15;
-      }
-      if (document.activeElement !== dashSettingMinDelay) {
-        dashSettingMinDelay.value = settings.minDelay || 25;
-      }
-      if (document.activeElement !== dashSettingMaxDelay) {
-        dashSettingMaxDelay.value = settings.maxDelay || 45;
-      }
-      dashSettingSkipExisting.checked = settings.skipExistingChats !== false;
-      dashSettingInterval.value = String(settings.autoScanInterval || 60);
-
-      // Render Tables
-      renderTables(sentHistory);
-
-    } catch (e) {
-      console.error('Failed to load dashboard data:', e);
+    // Complete Table on Logs
+    if (logsTableBody) {
+      logsTableBody.innerHTML = '';
+      history.forEach(item => {
+        const tr = document.createElement('tr');
+        const isSent = item.status === 'sent';
+        tr.innerHTML = `
+          <td><strong>${escapeHtml(item.name || 'Member')}</strong></td>
+          <td>${formatDate(item.sentAt)}</td>
+          <td style="max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
+          <td><span class="badge ${isSent ? 'sent' : 'skipped'}">${isSent ? 'Sent' : 'Skipped'}</span></td>
+          <td><a href="${item.profileUrl || '#'}" target="_blank" style="color: #0a66c2; font-weight: 500;">View Profile ↗</a></td>
+        `;
+        logsTableBody.appendChild(tr);
+      });
     }
   }
 
-  // Initial Load
-  await loadDashboard();
+  // --- 1. ATTACH ALL EVENT LISTENERS IMMEDIATELY ---
 
-  // Navigation switching
+  // Navigation tabs
   navItems.forEach(item => {
     item.addEventListener('click', (e) => {
       e.preventDefault();
@@ -197,21 +160,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         safety: 'Safety & Automation Settings',
         logs: 'Sent Messages History'
       };
-      pageTitle.textContent = titles[targetTab] || 'Dashboard';
+      if (pageTitle) pageTitle.textContent = titles[targetTab] || 'Dashboard';
     });
   });
 
-  btnGotoLogs.addEventListener('click', () => {
-    const logsNavItem = document.querySelector('.nav-item[data-tab="logs"]');
-    if (logsNavItem) logsNavItem.click();
-  });
+  if (btnGotoLogs) {
+    btnGotoLogs.addEventListener('click', (e) => {
+      e.preventDefault();
+      const logsNavItem = document.querySelector('.nav-item[data-tab="logs"]');
+      if (logsNavItem) logsNavItem.click();
+    });
+  }
 
-  // Dynamic tags insertion
+  // Dynamic tags
   tagPills.forEach(pill => {
-    pill.addEventListener('click', () => {
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
       const tag = pill.dataset.insert;
-      const start = dashTemplateInput.selectionStart || dashTemplateInput.value.length;
-      const end = dashTemplateInput.selectionEnd || dashTemplateInput.value.length;
+      const start = dashTemplateInput.selectionStart ?? dashTemplateInput.value.length;
+      const end = dashTemplateInput.selectionEnd ?? dashTemplateInput.value.length;
       const text = dashTemplateInput.value;
 
       dashTemplateInput.value = text.substring(0, start) + tag + text.substring(end);
@@ -221,112 +188,274 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  dashTemplateInput.addEventListener('input', updatePreview);
+  if (dashTemplateInput) {
+    dashTemplateInput.addEventListener('input', updatePreview);
+  }
 
   // Master switch
-  dashMasterToggle.addEventListener('change', async () => {
-    await chrome.runtime.sendMessage({
-      action: 'SAVE_SETTINGS',
-      settings: { enabled: dashMasterToggle.checked }
-    });
-    showToast(dashMasterToggle.checked ? 'Automation enabled' : 'Automation paused');
-    await loadDashboard();
-  });
-
-  // Save Template
-  btnDashSaveTemplate.addEventListener('click', async () => {
-    const template = dashTemplateInput.value.trim();
-    if (!template) {
-      showToast('Template cannot be empty');
-      return;
-    }
-    await chrome.runtime.sendMessage({
-      action: 'SAVE_SETTINGS',
-      settings: { template }
-    });
-    showToast('Template saved successfully!');
-  });
-
-  // Save Settings
-  btnDashSaveSettings.addEventListener('click', async () => {
-    const dailyLimit = parseInt(dashSettingDaily.value, 10) || 15;
-    const minDelay = parseInt(dashSettingMinDelay.value, 10) || 25;
-    const maxDelay = parseInt(dashSettingMaxDelay.value, 10) || 45;
-    const skipExistingChats = dashSettingSkipExisting.checked;
-    const autoScanInterval = parseInt(dashSettingInterval.value, 10) || 60;
-
-    if (minDelay >= maxDelay) {
-      showToast('Min delay must be less than Max delay');
-      return;
-    }
-
-    await chrome.runtime.sendMessage({
-      action: 'SAVE_SETTINGS',
-      settings: {
-        dailyLimit,
-        minDelay,
-        maxDelay,
-        skipExistingChats,
-        autoScanInterval
+  if (dashMasterToggle) {
+    dashMasterToggle.addEventListener('change', async () => {
+      try {
+        const { settings = {} } = await chrome.storage.local.get('settings');
+        const updated = { ...DEFAULT_SETTINGS, ...settings, enabled: dashMasterToggle.checked };
+        await chrome.storage.local.set({ settings: updated });
+        showToast(dashMasterToggle.checked ? 'Automation enabled' : 'Automation paused');
+        await syncDashboard();
+      } catch (err) {
+        console.error('Error toggling master switch:', err);
       }
     });
+  }
 
-    showToast('Safety settings saved successfully!');
-    await loadDashboard();
-  });
+  // Save Template
+  if (btnDashSaveTemplate) {
+    btnDashSaveTemplate.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const template = dashTemplateInput.value.trim();
+      if (!template) {
+        showToast('Template cannot be empty');
+        return;
+      }
+      try {
+        const { settings = {} } = await chrome.storage.local.get('settings');
+        const updated = { ...DEFAULT_SETTINGS, ...settings, template };
+        await chrome.storage.local.set({ settings: updated });
+        showToast('Template saved successfully!');
+      } catch (err) {
+        showToast('Error saving template');
+      }
+    });
+  }
+
+  // Save Settings
+  if (btnDashSaveSettings) {
+    btnDashSaveSettings.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const dailyLimit = parseInt(dashSettingDaily.value, 10) || 15;
+      const minDelay = parseInt(dashSettingMinDelay.value, 10) || 25;
+      const maxDelay = parseInt(dashSettingMaxDelay.value, 10) || 45;
+      const skipExistingChats = dashSettingSkipExisting.checked;
+      const autoScanInterval = parseInt(dashSettingInterval.value, 10) || 60;
+
+      if (minDelay >= maxDelay) {
+        showToast('Min delay must be less than Max delay');
+        return;
+      }
+
+      try {
+        const { settings = {} } = await chrome.storage.local.get('settings');
+        const updated = {
+          ...DEFAULT_SETTINGS,
+          ...settings,
+          dailyLimit,
+          minDelay,
+          maxDelay,
+          skipExistingChats,
+          autoScanInterval
+        };
+        await chrome.storage.local.set({ settings: updated });
+        showToast('Safety settings saved successfully!');
+        await syncDashboard();
+      } catch (err) {
+        showToast('Error saving settings');
+      }
+    });
+  }
 
   // Trigger Scan
-  btnDashScan.addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ action: 'START_SCAN_SESSION' });
-    showToast('Opening LinkedIn to scan new connections...');
-  });
+  if (btnDashScan) {
+    btnDashScan.addEventListener('click', async (e) => {
+      e.preventDefault();
+      showToast('Opening LinkedIn Connections...');
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/mynetwork/invite-connect/connections/*' });
+        let targetTabId;
+
+        if (tabs && tabs.length > 0) {
+          targetTabId = tabs[0].id;
+          await chrome.tabs.update(targetTabId, { active: true });
+        } else {
+          const newTab = await chrome.tabs.create({
+            url: 'https://www.linkedin.com/mynetwork/invite-connect/connections/',
+            active: true
+          });
+          targetTabId = newTab.id;
+        }
+
+        setTimeout(async () => {
+          try {
+            await chrome.tabs.sendMessage(targetTabId, { action: 'START_DOM_SCAN' });
+          } catch (err) {}
+        }, 2500);
+
+      } catch (err) {
+        console.error('Failed to trigger scan:', err);
+      }
+    });
+  }
 
   // Stop button
-  btnDashStop.addEventListener('click', async () => {
-    await chrome.runtime.sendMessage({ action: 'STOP_SCAN_SESSION' });
-    showToast('Stopping automation...');
-    await loadDashboard();
-  });
+  if (btnDashStop) {
+    btnDashStop.addEventListener('click', async (e) => {
+      e.preventDefault();
+      showToast('Stopping automation...');
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/*' });
+        for (const tab of tabs) {
+          try {
+            await chrome.tabs.sendMessage(tab.id, { action: 'STOP_DOM_SCAN' });
+          } catch (e) {}
+        }
+        await chrome.storage.local.set({
+          runtimeState: {
+            isProcessing: false,
+            currentStatus: 'Stopped by user',
+            lastRunTime: new Date().toISOString()
+          }
+        });
+        await syncDashboard();
+      } catch (err) {
+        console.error('Error stopping:', err);
+      }
+    });
+  }
 
   // Clear logs
-  btnDashClearLogs.addEventListener('click', async () => {
-    if (confirm('Are you sure you want to clear your message activity history?')) {
-      await chrome.runtime.sendMessage({ action: 'CLEAR_HISTORY' });
-      showToast('Activity history cleared');
-      await loadDashboard();
-    }
-  });
+  if (btnDashClearLogs) {
+    btnDashClearLogs.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (confirm('Are you sure you want to clear your message activity history?')) {
+        await chrome.storage.local.set({ sentHistory: [] });
+        showToast('Activity history cleared');
+        await syncDashboard();
+      }
+    });
+  }
 
   // Export CSV
-  btnExportCsv.addEventListener('click', () => {
-    if (!currentHistoryData || currentHistoryData.length === 0) {
-      showToast('No history available to export');
-      return;
+  if (btnExportCsv) {
+    btnExportCsv.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!currentHistoryData || currentHistoryData.length === 0) {
+        showToast('No history available to export');
+        return;
+      }
+
+      const headers = ['Name', 'Profile URL', 'Sent At', 'Status', 'Message'];
+      const rows = currentHistoryData.map(item => [
+        `"${(item.name || '').replace(/"/g, '""')}"`,
+        `"${(item.profileUrl || '').replace(/"/g, '""')}"`,
+        `"${(item.sentAt || '').replace(/"/g, '""')}"`,
+        `"${(item.status || '').replace(/"/g, '""')}"`,
+        `"${(item.message || '').replace(/"/g, '""')}"`
+      ]);
+
+      const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `linkedin_welcome_history_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Exported CSV successfully!');
+    });
+  }
+
+  // --- 2. ASYNC STORAGE SYNC ---
+  async function syncDashboard() {
+    try {
+      const data = await chrome.storage.local.get([
+        'settings',
+        'stats',
+        'sentHistory',
+        'runtimeState'
+      ]);
+
+      const today = getTodayString();
+      const settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
+      let stats = data.stats || { todayCount: 0, lastResetDate: today, totalSent: 0 };
+
+      if (stats.lastResetDate !== today) {
+        stats.todayCount = 0;
+        stats.lastResetDate = today;
+        await chrome.storage.local.set({ stats });
+      }
+
+      const sentHistory = data.sentHistory || [];
+      const runtimeState = data.runtimeState || {
+        isProcessing: false,
+        currentStatus: 'Ready',
+        lastRunTime: null
+      };
+
+      if (dashMasterToggle) dashMasterToggle.checked = Boolean(settings.enabled);
+
+      if (statToday) statToday.textContent = stats.todayCount || 0;
+      if (statTodaySub) statTodaySub.textContent = `Daily limit: ${settings.dailyLimit || 15}`;
+      if (statTotal) statTotal.textContent = stats.totalSent || 0;
+
+      if (statStatus) {
+        if (!settings.enabled) {
+          statStatus.textContent = 'Paused';
+          statStatus.style.color = '#64748b';
+        } else if (runtimeState.isProcessing) {
+          statStatus.textContent = 'In Progress';
+          statStatus.style.color = '#f59e0b';
+          if (btnDashScan) btnDashScan.classList.add('hidden');
+          if (btnDashStop) btnDashStop.classList.remove('hidden');
+        } else {
+          statStatus.textContent = 'Ready';
+          statStatus.style.color = '#10b981';
+          if (btnDashScan) btnDashScan.classList.remove('hidden');
+          if (btnDashStop) btnDashStop.classList.add('hidden');
+        }
+      }
+
+      if (statLastRun) {
+        statLastRun.textContent = runtimeState.lastRunTime ? `Last run: ${formatDate(runtimeState.lastRunTime)}` : 'Last run: Never';
+      }
+
+      if (dashTemplateInput && document.activeElement !== dashTemplateInput) {
+        dashTemplateInput.value = settings.template || DEFAULT_SETTINGS.template;
+        updatePreview();
+      }
+
+      if (dashSettingDaily && document.activeElement !== dashSettingDaily) {
+        dashSettingDaily.value = settings.dailyLimit || 15;
+      }
+      if (dashSettingMinDelay && document.activeElement !== dashSettingMinDelay) {
+        dashSettingMinDelay.value = settings.minDelay || 25;
+      }
+      if (dashSettingMaxDelay && document.activeElement !== dashSettingMaxDelay) {
+        dashSettingMaxDelay.value = settings.maxDelay || 45;
+      }
+      if (dashSettingSkipExisting) {
+        dashSettingSkipExisting.checked = settings.skipExistingChats !== false;
+      }
+      if (dashSettingInterval) {
+        dashSettingInterval.value = String(settings.autoScanInterval || 60);
+      }
+
+      renderTables(sentHistory);
+
+    } catch (e) {
+      console.error('Failed to sync dashboard:', e);
     }
+  }
 
-    const headers = ['Name', 'Profile URL', 'Sent At', 'Status', 'Message'];
-    const rows = currentHistoryData.map(item => [
-      `"${(item.name || '').replace(/"/g, '""')}"`,
-      `"${(item.profileUrl || '').replace(/"/g, '""')}"`,
-      `"${(item.sentAt || '').replace(/"/g, '""')}"`,
-      `"${(item.status || '').replace(/"/g, '""')}"`,
-      `"${(item.message || '').replace(/"/g, '""')}"`
-    ]);
+  // Load storage immediately
+  syncDashboard();
 
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `linkedin_welcome_history_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Exported CSV successfully!');
-  });
-
-  // Listen to background updates
+  // React to storage changes
   chrome.storage.onChanged.addListener(() => {
-    loadDashboard();
+    syncDashboard();
   });
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initDashboard);
+} else {
+  initDashboard();
+}

@@ -179,6 +179,40 @@ function getConnectionCards() {
   return results;
 }
 
+const DEFAULT_SETTINGS = {
+  enabled: true,
+  template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  dailyLimit: 15,
+  minDelay: 25,
+  maxDelay: 45,
+  skipExistingChats: true,
+  autoScanInterval: 60
+};
+
+function getTodayString() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function getExtensionData() {
+  try {
+    const local = await chrome.storage.local.get(['settings', 'stats', 'sentHistory']);
+    const today = getTodayString();
+    const settings = { ...DEFAULT_SETTINGS, ...(local.settings || {}) };
+    let stats = local.stats || { todayCount: 0, lastResetDate: today, totalSent: 0 };
+    if (stats.lastResetDate !== today) {
+      stats.todayCount = 0;
+      stats.lastResetDate = today;
+      await chrome.storage.local.set({ stats });
+    }
+    const sentHistory = local.sentHistory || [];
+    return { settings, stats, sentHistory };
+  } catch (err) {
+    const response = await chrome.runtime.sendMessage({ action: 'GET_DATA' });
+    return response.data;
+  }
+}
+
 // Main Automation Runner
 async function runAutoWelcomeSequence() {
   if (isRunning) return;
@@ -186,13 +220,8 @@ async function runAutoWelcomeSequence() {
   shouldStop = false;
 
   try {
-    // 1. Fetch current settings, stats & history
-    const response = await chrome.runtime.sendMessage({ action: 'GET_DATA' });
-    if (!response || !response.success) {
-      throw new Error('Failed to retrieve extension configuration');
-    }
-
-    const { settings, stats, sentHistory } = response.data;
+    // 1. Fetch current settings, stats & history directly
+    const { settings, stats, sentHistory } = await getExtensionData();
 
     if (!settings.enabled) {
       updateHud('Auto-Welcome is currently disabled in settings.');
