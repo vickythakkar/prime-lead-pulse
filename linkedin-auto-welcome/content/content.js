@@ -316,69 +316,62 @@ function querySelectorDeep(selector, root = document) {
 
 // Close all existing open chat / compose windows (deep)
 function closeAllOpenChats() {
-  const closeSelectors = [
-    'button[data-control-name="overlay.close_conversation_window"]',
-    'button[data-control-name="overlay.close_compose_window"]',
-    'button[data-test-msg-overlay-conversation-bubble-close-button]',
-    'button.msg-overlay-bubble-header__control--close',
-    '.msg-overlay-bubble-header__controls button:last-child',
-    '.msg-overlay-bubble-header button:last-child',
-    'button[aria-label*="Close your conversation" i]',
-    'button[aria-label*="Close your draft" i]',
-    'button[aria-label*="Dismiss" i]',
-    'button.artdeco-modal__dismiss'
-  ];
-
-  for (const sel of closeSelectors) {
-    const buttons = querySelectorAllDeep(sel);
-    buttons.forEach(b => {
-      try { b.click(); } catch (e) {}
-    });
-  }
-
-  // Also close by SVG icon test-icon="close-small"
   const allButtons = querySelectorAllDeep('button');
+
   for (const b of allButtons) {
+    // Never click buttons in top nav or HUD
+    if (b.closest && b.closest('header, nav, #global-nav, .global-nav, #law-floating-hud')) continue;
+
     const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+    const title = (b.getAttribute('title') || '').toLowerCase();
     const svg = b.querySelector('svg');
     const testIcon = (svg?.getAttribute('data-test-icon') || '').toLowerCase();
-    if (aria.includes('close your conversation') || aria.includes('close your draft') || testIcon.includes('close')) {
+    const svgContent = (svg?.innerHTML || '').toLowerCase();
+
+    const isCloseBtn = (
+      aria === 'close' ||
+      aria.includes('close') ||
+      aria.includes('dismiss') ||
+      title === 'close' ||
+      title.includes('close') ||
+      testIcon.includes('close') ||
+      svgContent.includes('close') ||
+      b.classList.contains('msg-overlay-bubble-header__control--close')
+    );
+
+    if (isCloseBtn) {
       try { b.click(); } catch (e) {}
     }
   }
 
-  // Dismiss any "Discard draft?" prompt
-  const discardBtns = allButtons.filter(b => {
-    return (b.innerText || b.textContent || '').trim().toLowerCase() === 'discard';
-  });
-  discardBtns.forEach(b => {
-    try { b.click(); } catch (e) {}
-  });
+  // Also dismiss any "Discard draft?" prompt if visible
+  for (const b of allButtons) {
+    const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+    if (txt === 'discard') {
+      try { b.click(); } catch (e) {}
+    }
+  }
 }
 
 // Close a specific conversation window
 function closeConversationWindow(convoEl) {
   if (convoEl) {
-    const closeBtn = querySelectorDeep(
-      'button[data-control-name="overlay.close_conversation_window"], ' +
-      'button[data-control-name="overlay.close_compose_window"], ' +
-      '.msg-overlay-bubble-header__controls button:last-child, ' +
-      '.msg-overlay-bubble-header button:last-child, ' +
-      'button.msg-overlay-bubble-header__control--close, ' +
-      'button[aria-label*="Close" i], ' +
-      'button[aria-label*="Dismiss" i]',
-      convoEl
-    );
-    if (closeBtn) {
-      try { closeBtn.click(); } catch (e) {}
-      return;
+    const buttons = querySelectorAllDeep('button', convoEl);
+    for (const b of buttons) {
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      const svg = b.querySelector('svg');
+      const testIcon = (svg?.getAttribute('data-test-icon') || '').toLowerCase();
+      if (aria.includes('close') || aria.includes('dismiss') || testIcon.includes('close')) {
+        try { b.click(); } catch (e) {}
+        return;
+      }
     }
   }
   closeAllOpenChats();
 }
 
 // Ultra-Resilient Message Box Finder (Regular DOM + Shadow DOM)
-// Strictly targets the message body and avoids the recipient search bar
+// Strictly targets the message body and prioritizes the target person's window
 async function waitForConversationWindow(targetName = '') {
   const targetSelectors = [
     'div.msg-form__contenteditable[contenteditable="true"]',
@@ -390,8 +383,9 @@ async function waitForConversationWindow(targetName = '') {
     'div[data-placeholder*="Write a message" i]'
   ];
 
+  const firstName = targetName ? extractFirstName(targetName).toLowerCase() : '';
+
   for (let i = 0; i < 20; i++) {
-    // Search across candidate selectors with shadow DOM support
     for (const sel of targetSelectors) {
       const found = querySelectorAllDeep(sel).filter(el => {
         // Exclude top navbar search input
@@ -408,7 +402,21 @@ async function waitForConversationWindow(targetName = '') {
       });
 
       if (found.length > 0) {
-        const textbox = found[found.length - 1];
+        // If multiple windows exist, pick the one that belongs to targetName!
+        let chosen = null;
+        if (firstName && found.length > 1) {
+          chosen = found.find(el => {
+            const container = (el.closest && el.closest(
+              '.msg-overlay-conversation-bubble, .msg-overlay-list-bubble, ' +
+              '.msg-compose-overlay, .msg-convo-wrapper, .msg-overlay-container, ' +
+              '.msg-s-message-list-container, [role="dialog"], .application-outlet'
+            )) || el.parentElement?.parentElement?.parentElement;
+            const text = (container?.innerText || container?.textContent || '').toLowerCase();
+            return text.includes(firstName);
+          });
+        }
+
+        const textbox = chosen || found[found.length - 1];
         const container = (textbox.closest && textbox.closest(
           '.msg-overlay-conversation-bubble, .msg-overlay-list-bubble, ' +
           '.msg-compose-overlay, .msg-convo-wrapper, .msg-overlay-container, ' +
@@ -431,6 +439,7 @@ async function waitForConversationWindow(targetName = '') {
   console.warn('[LAW] waitForConversationWindow timed out');
   return null;
 }
+
 
 
 /**
