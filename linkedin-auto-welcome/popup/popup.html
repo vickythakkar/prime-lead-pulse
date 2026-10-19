@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkedIn Auto Welcome</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">W</div>
+        <div>
+          <h1 class="brand-title">Auto Welcome</h1>
+          <span class="brand-sub">LinkedIn Responder</span>
+        </div>
+      </div>
+      <div class="header-controls">
+        <label class="switch" title="Toggle Automation Master Switch">
+          <input type="checkbox" id="master-toggle" checked>
+          <span class="slider round"></span>
+        </label>
+        <button id="btn-open-full-dashboard" class="icon-btn" title="Open Full Dashboard">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Stats & Live Progress Bar -->
+    <div class="status-card">
+      <div class="status-row">
+        <div class="status-indicator">
+          <span class="status-dot" id="status-dot"></span>
+          <span class="status-text" id="status-text">Ready</span>
+        </div>
+        <div class="quota-badge" id="quota-badge">Today: 0 / 15</div>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="quota-progress-fill" style="width: 0%;"></div>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="actions-card">
+      <button id="btn-trigger-scan" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>
+        <span>Scan & Send Messages</span>
+      </button>
+      <button id="btn-stop" class="btn btn-danger hidden">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="6" y="6" width="12" height="12"></rect>
+        </svg>
+        <span>Stop</span>
+      </button>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" data-tab="template">Template</button>
+      <button class="tab-btn" data-tab="settings">Safety & Limits</button>
+      <button class="tab-btn" data-tab="logs">Activity Log</button>
+    </div>
+
+    <!-- Tab 1: Template Editor -->
+    <div class="tab-pane active" id="pane-template">
+      <div class="form-group">
+        <div class="form-header">
+          <label for="template-input">Welcome Message</label>
+          <div class="variable-tags">
+            <button type="button" class="tag-btn" data-insert="{firstName}">+ {firstName}</button>
+            <button type="button" class="tag-btn" data-insert="{fullName}">+ {fullName}</button>
+          </div>
+        </div>
+        <textarea id="template-input" rows="4" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
+      </div>
+
+      <div class="preview-box">
+        <span class="preview-label">Live Preview:</span>
+        <p id="template-preview" class="preview-content">Hi Sarah, thanks for connecting! Looking forward to staying in touch.</p>
+      </div>
+
+      <button id="btn-save-template" class="btn btn-secondary">Save Template</button>
+    </div>
+
+    <!-- Tab 2: Settings -->
+    <div class="tab-pane" id="pane-settings">
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Daily Safety Cap</span>
+          <span class="setting-desc">Max messages per 24 hours</span>
+        </div>
+        <input type="number" id="setting-daily-limit" class="num-input" min="1" max="50" value="15">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Human Delay Range (Seconds)</span>
+          <span class="setting-desc">Random pause between messages</span>
+        </div>
+        <div class="range-inputs">
+          <input type="number" id="setting-min-delay" class="num-input small" min="10" max="120" value="25" title="Min seconds">
+          <span class="sep">to</span>
+          <input type="number" id="setting-max-delay" class="num-input small" min="15" max="180" value="45" title="Max seconds">
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Skip Existing Conversations</span>
+          <span class="setting-desc">Don't message if chat history exists</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="setting-skip-existing" checked>
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Background Scan Interval</span>
+          <span class="setting-desc">Auto-check while browser is open</span>
+        </div>
+        <select id="setting-scan-interval" class="select-input">
+          <option value="30">Every 30 minutes</option>
+          <option value="60" selected>Every 1 hour</option>
+          <option value="120">Every 2 hours</option>
+        </select>
+      </div>
+
+      <button id="btn-save-settings" class="btn btn-secondary">Save Settings</button>
+    </div>
+
+    <!-- Tab 3: Logs -->
+    <div class="tab-pane" id="pane-logs">
+      <div class="logs-header">
+        <span class="logs-count" id="logs-count">0 sent recently</span>
+        <button id="btn-clear-logs" class="text-btn danger">Clear Logs</button>
+      </div>
+      <div class="logs-list" id="logs-list">
+        <div class="empty-state">No messages sent yet. Newly accepted connections will appear here.</div>
+      </div>
+    </div>
+
+    <!-- Toast message alert -->
+    <div id="toast" class="toast hidden">Saved successfully!</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
