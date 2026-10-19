@@ -378,27 +378,31 @@ function closeConversationWindow(convoEl) {
 }
 
 // Ultra-Resilient Message Box Finder (Regular DOM + Shadow DOM)
+// Strictly targets the message body and avoids the recipient search bar
 async function waitForConversationWindow(targetName = '') {
   const targetSelectors = [
+    'div.msg-form__contenteditable[contenteditable="true"]',
     '.msg-form__contenteditable',
-    '.public-DraftEditor-content',
-    'div[role="textbox"][contenteditable="true"]',
-    'div[role="textbox"]',
-    '[contenteditable="true"]',
-    'div[data-placeholder*="message" i]',
-    'div[aria-label*="message" i]',
-    'textarea.msg-form__textarea',
-    'textarea'
+    '.public-DraftEditor-content[contenteditable="true"]',
+    'form.msg-form [contenteditable="true"]',
+    '.msg-form [contenteditable="true"]',
+    'div[aria-label*="Write a message" i]',
+    'div[data-placeholder*="Write a message" i]'
   ];
 
   for (let i = 0; i < 20; i++) {
-    // Search across all candidate selectors with shadow DOM support
+    // Search across candidate selectors with shadow DOM support
     for (const sel of targetSelectors) {
       const found = querySelectorAllDeep(sel).filter(el => {
         // Exclude top navbar search input
         if (el.closest && el.closest('header, nav, #global-nav, .global-nav')) return false;
         // Exclude minimized bubbles
         if (el.closest && el.closest('.msg-overlay-conversation-bubble--minimized')) return false;
+        // NEVER match the recipient typeahead / search bar
+        if (el.closest && el.closest('.msg-connections-typeahead, .msg-compose-recipients, [data-test-msg-compose-typeahead], .artdeco-pill-input')) return false;
+        const ph = (el.getAttribute('data-placeholder') || el.getAttribute('placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
+        if (ph.includes('type a name') || ph.includes('search')) return false;
+
         // Verify visible
         return el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0;
       });
@@ -416,7 +420,7 @@ async function waitForConversationWindow(targetName = '') {
       }
     }
 
-    // Every second, update HUD with attempt countdown so user sees live activity
+    // Every second, update HUD with attempt countdown
     if (i % 2 === 0 && targetName) {
       updateHud(`Locating chat with ${targetName} (${Math.round((20 - i) * 0.3)}s)...`);
     }
@@ -427,6 +431,7 @@ async function waitForConversationWindow(targetName = '') {
   console.warn('[LAW] waitForConversationWindow timed out');
   return null;
 }
+
 
 /**
  * Type text into LinkedIn's React / Draft.js message editor.
@@ -662,11 +667,9 @@ async function runAutoWelcomeSequence() {
 
       if (shouldStop) break;
 
-      // Click "Message" button
+      // Click "Message" button (single click to prevent opening multiple compose popups)
       conn.messageButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
       conn.messageButton.focus();
-      conn.messageButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      conn.messageButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
       conn.messageButton.click();
 
       // Wait for conversation/compose window to appear (with live progress on HUD)
@@ -705,6 +708,8 @@ async function runAutoWelcomeSequence() {
           sentMap.add(conn.profileUrl);
 
           closeConversationWindow(activeConvo);
+          await sleep(500);
+          closeAllOpenChats();
           await sleep(1000);
           continue;
         }
@@ -724,6 +729,8 @@ async function runAutoWelcomeSequence() {
         updateHud(`⚠️ Could not type for ${firstName}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
         console.warn('[LAW] Could not type message for', conn.name);
         closeConversationWindow(activeConvo);
+        await sleep(500);
+        closeAllOpenChats();
         await sleep(1000);
         continue;
       }
@@ -733,6 +740,7 @@ async function runAutoWelcomeSequence() {
 
       if (shouldStop) {
         closeConversationWindow(activeConvo);
+        closeAllOpenChats();
         break;
       }
 
@@ -802,7 +810,9 @@ async function runAutoWelcomeSequence() {
 
         // Close conversation window cleanly
         closeConversationWindow(activeConvo);
-        await sleep(1500);
+        await sleep(800);
+        closeAllOpenChats();
+        await sleep(1000);
 
         // Human randomized delay before next connection
         const delayMs = getRandomDelay(settings.minDelay, settings.maxDelay);
@@ -816,8 +826,11 @@ async function runAutoWelcomeSequence() {
       } else {
         console.warn('[LAW] Send button was not active for', conn.name);
         closeConversationWindow(activeConvo);
-        await sleep(1500);
+        await sleep(500);
+        closeAllOpenChats();
+        await sleep(1000);
       }
+
     }
 
     const finishMsg = shouldStop
