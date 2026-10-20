@@ -128,7 +128,7 @@ function initPopup() {
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{fullName}">+ {fullName}</button>
             </div>
           </div>
-          <textarea class="rule-template-input" rows="3" placeholder="Message template for this rule">${escapeHtml(rule.template || '')}</textarea>
+          <textarea class="rule-template-input" rows="4" placeholder="Message template for this rule">${escapeHtml(rule.template || '')}</textarea>
         </div>
       `;
 
