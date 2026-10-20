@@ -58,6 +58,9 @@
         </svg>
         <span>Scan & Send Messages</span>
       </button>
+      <button id="btn-withdraw-invites" class="btn" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; flex: 0.9;" title="Withdraw pending invitations sent more than 6 months ago">
+        <span>🧹 Withdraw Invites (>6m)</span>
+      </button>
       <button id="btn-stop" class="btn btn-danger hidden">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="6" y="6" width="12" height="12"></rect>
@@ -97,12 +100,19 @@
             <label for="template-input">Default Message</label>
             <div style="font-size: 11px; color: #64748b;">Sent if no keyword rules match</div>
           </div>
-          <div class="variable-tags">
+          <div class="variable-tags" style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;">
             <button type="button" class="tag-btn" data-insert="{firstName}">+ {firstName}</button>
             <button type="button" class="tag-btn" data-insert="{fullName}">+ {fullName}</button>
+            <button type="button" class="tag-btn" data-insert="{company}">+ {company}</button>
+            <button type="button" class="tag-btn" data-insert="{timeOfDay}">+ {timeOfDay}</button>
+            <button type="button" class="tag-btn" data-insert="{dayOfWeek}">+ {dayOfWeek}</button>
+            <button type="button" class="tag-btn" data-insert="{headline}">+ {headline}</button>
           </div>
         </div>
         <textarea id="template-input" rows="4" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
+        <div style="font-size: 11px; color: #64748b; line-height: 1.4; margin-top: 2px;">
+          💡 <strong>Spintax:</strong> Use <code>{Hi|Hello|Hey}</code> for word variations, or separate entire messages with <code>---OR---</code> to randomly rotate complete templates!
+        </div>
       </div>
 
       <div class="preview-box">
@@ -156,6 +166,33 @@
           <option value="60" selected>Every 1 hour</option>
           <option value="120">Every 2 hours</option>
         </select>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Free Webhook / Google Sheets</span>
+          <span class="setting-desc">Log sent leads to your CRM or sheet (Zapier/Make)</span>
+        </div>
+        <input type="url" id="setting-webhook-url" class="select-input" style="width: 200px;" placeholder="https://script.google.com/...">
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-title">Automated Follow-Up</span>
+          <span class="setting-desc">Send follow-up if no reply in X days</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="setting-followup-enabled">
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="setting-row" id="row-followup-days">
+        <div class="setting-info">
+          <span class="setting-title">Follow-Up Delay</span>
+          <span class="setting-desc">Days to wait before sending follow-up</span>
+        </div>
+        <input type="number" id="setting-followup-days" class="num-input small" min="1" max="30" value="4">
       </div>
 
       <button id="btn-save-settings" class="btn btn-secondary">Save Settings</button>

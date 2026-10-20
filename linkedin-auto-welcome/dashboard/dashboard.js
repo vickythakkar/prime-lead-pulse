@@ -18,7 +18,11 @@ const DEFAULT_SETTINGS = {
   minDelay: 25,
   maxDelay: 45,
   skipExistingChats: true,
-  autoScanInterval: 60
+  autoScanInterval: 60,
+  webhookUrl: "",
+  followUpEnabled: false,
+  followUpDays: 4,
+  followUpTemplate: "Hi {firstName}, following up on my previous note. Hope you're having a productive week!"
 };
 
 function getTodayString() {
@@ -44,23 +48,29 @@ function initDashboard() {
   const dashMasterToggle = document.getElementById('dash-master-toggle');
   const btnDashScan = document.getElementById('btn-dash-scan');
   const btnDashStop = document.getElementById('btn-dash-stop');
+  const btnDashWithdrawInvites = document.getElementById('btn-dash-withdraw-invites');
   const btnGotoLogs = document.getElementById('btn-goto-logs');
 
   // Template Form
   const dashTemplateInput = document.getElementById('dash-template-input');
   const dashTemplatePreview = document.getElementById('dash-template-preview');
   const btnDashSaveTemplate = document.getElementById('btn-dash-save-template');
-  const tagPills = document.querySelectorAll('.tag-pill:not(.dash-rule-tag-pill)');
+  const tagPills = document.querySelectorAll('.tag-pill:not(.dash-rule-tag-pill):not([data-insert-followup])');
   const dashRulesContainer = document.getElementById('dash-rules-container');
   const btnDashAddRule = document.getElementById('btn-dash-add-rule');
   let currentDashRules = [];
 
-  // Safety Settings Form
+  // Safety & Integrations Form
   const dashSettingDaily = document.getElementById('dash-setting-daily');
   const dashSettingMinDelay = document.getElementById('dash-setting-min-delay');
   const dashSettingMaxDelay = document.getElementById('dash-setting-max-delay');
   const dashSettingSkipExisting = document.getElementById('dash-setting-skip-existing');
   const dashSettingInterval = document.getElementById('dash-setting-interval');
+  const dashSettingWebhook = document.getElementById('dash-setting-webhook');
+  const dashFollowupToggle = document.getElementById('dash-followup-toggle');
+  const dashSettingFollowupDays = document.getElementById('dash-setting-followup-days');
+  const dashFollowupTemplateInput = document.getElementById('dash-followup-template-input');
+  const followupTagPills = document.querySelectorAll('[data-insert-followup]');
   const btnDashSaveSettings = document.getElementById('btn-dash-save-settings');
 
   // Tables & Logs
@@ -85,10 +95,23 @@ function initDashboard() {
 
   function updatePreview() {
     if (!dashTemplateInput || !dashTemplatePreview) return;
-    const raw = dashTemplateInput.value || '';
-    const sample = raw
+    let raw = dashTemplateInput.value || '';
+    if (raw.includes('---OR---')) {
+      raw = raw.split('---OR---')[0].trim();
+    } else if (raw.includes('===VARIANT===')) {
+      raw = raw.split('===VARIANT===')[0].trim();
+    }
+    // Preview first spintax branch
+    let sample = raw.replace(/\{([^{}]+?\|[^{}]+?)\}/g, (match, choices) => {
+      return choices.split('|')[0].trim();
+    });
+    sample = sample
       .replace(/\{firstName\}/gi, 'Sarah')
-      .replace(/\{fullName\}/gi, 'Sarah Jenkins');
+      .replace(/\{fullName\}/gi, 'Sarah Jenkins')
+      .replace(/\{company\}/gi, 'Apex Realty')
+      .replace(/\{timeOfDay\}/gi, 'afternoon')
+      .replace(/\{dayOfWeek\}/gi, 'Wednesday')
+      .replace(/\{headline\}/gi, 'Realtor at Apex Realty');
     dashTemplatePreview.textContent = sample || '(Empty message)';
   }
 
@@ -135,14 +158,19 @@ function initDashboard() {
           <input type="text" class="dash-rule-keywords-input" placeholder="e.g. realtor, real estate, broker, realty, mortgage, USA" value="${escapeHtml(rule.keywords || '')}">
         </div>
         <div>
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;">
             <label style="font-size: 12px; font-weight: 600; color: #475569;">Targeted Message Template:</label>
-            <div class="tags-group">
+            <div class="tags-group" style="display: flex; flex-wrap: wrap; gap: 4px;">
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{firstName}">+ {firstName}</button>
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{fullName}">+ {fullName}</button>
+              <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{company}">+ {company}</button>
+              <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{timeOfDay}">+ {timeOfDay}</button>
+              <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{dayOfWeek}">+ {dayOfWeek}</button>
+              <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{headline}">+ {headline}</button>
             </div>
           </div>
           <textarea class="code-textarea dash-rule-template-input" rows="3" placeholder="Message to send when keywords match...">${escapeHtml(rule.template || '')}</textarea>
+          <p style="font-size: 11px; color: #64748b; margin-top: 4px;">Tip: Separate full variants with <code>---OR---</code>, or use inline spintax <code>{Hi|Hello}</code>.</p>
         </div>
       `;
 
@@ -386,6 +414,38 @@ function initDashboard() {
     });
   }
 
+  // Follow-up dynamic tags
+  followupTagPills.forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
+      const tag = pill.dataset.insertFollowup;
+      if (!dashFollowupTemplateInput) return;
+      const start = dashFollowupTemplateInput.selectionStart ?? dashFollowupTemplateInput.value.length;
+      const end = dashFollowupTemplateInput.selectionEnd ?? dashFollowupTemplateInput.value.length;
+      const text = dashFollowupTemplateInput.value;
+
+      dashFollowupTemplateInput.value = text.substring(0, start) + tag + text.substring(end);
+      dashFollowupTemplateInput.focus();
+      dashFollowupTemplateInput.selectionStart = dashFollowupTemplateInput.selectionEnd = start + tag.length;
+    });
+  });
+
+  // Withdraw Invites button
+  if (btnDashWithdrawInvites) {
+    btnDashWithdrawInvites.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!confirm('This will open your Sent Invitations page and withdraw all pending invites sent more than 6 months ago. Proceed?')) {
+        return;
+      }
+      showToast('Opening Sent Invitations & withdrawing >6m invites...');
+      try {
+        await chrome.runtime.sendMessage({ action: 'START_WITHDRAW_INVITES' });
+      } catch (err) {
+        console.error('Failed to start invite cleanup:', err);
+      }
+    });
+  }
+
   // Save Settings
   if (btnDashSaveSettings) {
     btnDashSaveSettings.addEventListener('click', async (e) => {
@@ -396,6 +456,10 @@ function initDashboard() {
       const maxDelay = parseInt(dashSettingMaxDelay.value, 10) || 45;
       const skipExistingChats = dashSettingSkipExisting.checked;
       const autoScanInterval = parseInt(dashSettingInterval.value, 10) || 60;
+      const webhookUrl = dashSettingWebhook ? dashSettingWebhook.value.trim() : '';
+      const followUpEnabled = dashFollowupToggle ? dashFollowupToggle.checked : false;
+      const followUpDays = parseInt(dashSettingFollowupDays?.value, 10) || 4;
+      const followUpTemplate = dashFollowupTemplateInput ? dashFollowupTemplateInput.value.trim() : '';
 
       if (minDelay >= maxDelay) {
         showToast('Min delay must be less than Max delay');
@@ -411,10 +475,14 @@ function initDashboard() {
           minDelay,
           maxDelay,
           skipExistingChats,
-          autoScanInterval
+          autoScanInterval,
+          webhookUrl,
+          followUpEnabled,
+          followUpDays,
+          followUpTemplate
         };
         await chrome.storage.local.set({ settings: updated });
-        showToast('Safety settings saved successfully!');
+        showToast('Safety settings & Integrations saved successfully!');
         await syncDashboard();
       } catch (err) {
         showToast('Error saving settings');
@@ -608,6 +676,18 @@ function initDashboard() {
       }
       if (dashSettingInterval) {
         dashSettingInterval.value = String(settings.autoScanInterval || 60);
+      }
+      if (dashSettingWebhook && document.activeElement !== dashSettingWebhook) {
+        dashSettingWebhook.value = settings.webhookUrl || '';
+      }
+      if (dashFollowupToggle) {
+        dashFollowupToggle.checked = Boolean(settings.followUpEnabled);
+      }
+      if (dashSettingFollowupDays && document.activeElement !== dashSettingFollowupDays) {
+        dashSettingFollowupDays.value = settings.followUpDays || 4;
+      }
+      if (dashFollowupTemplateInput && document.activeElement !== dashFollowupTemplateInput) {
+        dashFollowupTemplateInput.value = settings.followUpTemplate || DEFAULT_SETTINGS.followUpTemplate;
       }
 
       renderTables(sentHistory);

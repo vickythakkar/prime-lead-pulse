@@ -57,6 +57,9 @@
           <p class="subtitle">Monitor welcome messages, adjust safety limits, and export logs.</p>
         </div>
         <div class="topbar-actions">
+          <button id="btn-dash-withdraw-invites" class="btn btn-outline" style="border-color: #cbd5e1; color: #475569;" title="Clean pending invitations older than 6 months">
+            🧹 Clean Invites (>6m)
+          </button>
           <button id="btn-dash-scan" class="btn btn-primary">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
             Scan & Message Now
@@ -118,6 +121,15 @@
 
       <!-- Section: Message Template -->
       <section id="section-template" class="content-section">
+        <!-- Spintax & Multi-Variant Help Banner -->
+        <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 18px; margin-bottom: 16px; font-size: 13px; color: #166534; line-height: 1.5;">
+          <strong>💡 Multi-Variant Templates & Spintax Enabled:</strong>
+          <div style="margin-top: 4px;">
+            • <strong>Full Message Variations:</strong> Separate complete messages with <code>---OR---</code> in any template. The extension will randomly alternate between your variations!<br>
+            • <strong>Inline Spintax:</strong> Use <code>{Hi|Hello|Hey}</code> or <code>{great to connect|thanks for connecting}</code> to randomize word choices.
+          </div>
+        </div>
+
         <!-- Card 1: Targeted Rules -->
         <div class="card">
           <div class="card-header">
@@ -139,9 +151,13 @@
               <h3>Default Welcome Message (Fallback)</h3>
               <p class="card-desc">Sent to new connections who do not match any of the targeted keyword rules above.</p>
             </div>
-            <div class="tags-group">
+            <div class="tags-group" style="display: flex; flex-wrap: wrap; gap: 4px;">
               <button class="tag-pill" data-insert="{firstName}">+ {firstName}</button>
               <button class="tag-pill" data-insert="{fullName}">+ {fullName}</button>
+              <button class="tag-pill" data-insert="{company}">+ {company}</button>
+              <button class="tag-pill" data-insert="{timeOfDay}">+ {timeOfDay}</button>
+              <button class="tag-pill" data-insert="{dayOfWeek}">+ {dayOfWeek}</button>
+              <button class="tag-pill" data-insert="{headline}">+ {headline}</button>
             </div>
           </div>
           <div class="form-body">
@@ -213,6 +229,61 @@
           </div>
           <div class="form-actions">
             <button id="btn-dash-save-settings" class="btn btn-primary">Save Safety Settings</button>
+          </div>
+        </div>
+
+        <!-- Free Webhook / Google Sheets Integration Card -->
+        <div class="card" style="margin-top: 16px;">
+          <div class="card-header">
+            <div>
+              <h3>Free Webhook & CRM Sync (Google Sheets / Zapier / Make)</h3>
+              <p class="card-desc">Automatically log every messaged contact (name, company, headline, profile URL, message sent) to your Google Sheet or CRM in real-time. 100% free.</p>
+            </div>
+          </div>
+          <div class="settings-list">
+            <div class="setting-item">
+              <div>
+                <strong>Webhook Endpoint URL</strong>
+                <p>Paste your Google Apps Script Web App URL, Zapier Webhook, or Make.com URL.</p>
+              </div>
+              <input type="url" id="dash-setting-webhook" class="dash-input" style="width: 380px;" placeholder="https://script.google.com/macros/s/.../exec">
+            </div>
+          </div>
+          <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 12px 20px; font-size: 12px; color: #64748b; line-height: 1.45;">
+            <strong>Quick Free Google Sheets Setup (30 seconds):</strong> In Google Sheets $\rightarrow$ Extensions $\rightarrow$ Apps Script $\rightarrow$ Paste: <code>function doPost(e){SpreadsheetApp.getActiveSheet().appendRow(Object.values(JSON.parse(e.postData.contents))); return ContentService.createTextOutput("ok");}</code> $\rightarrow$ Deploy as Web App (Access: Anyone) $\rightarrow$ Paste URL above and click Save!
+          </div>
+        </div>
+
+        <!-- Follow-Up Sequences Card -->
+        <div class="card" style="margin-top: 16px;">
+          <div class="card-header">
+            <div>
+              <h3>Automated Follow-Up Sequences</h3>
+              <p class="card-desc">Automatically send a gentle follow-up if a contact hasn't replied after a set number of days.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="dash-followup-toggle">
+              <span class="slider round"></span>
+            </label>
+          </div>
+          <div class="settings-list">
+            <div class="setting-item">
+              <div>
+                <strong>Follow-Up Delay (Days)</strong>
+                <p>Days to wait after the initial welcome message before sending the follow-up note.</p>
+              </div>
+              <input type="number" id="dash-setting-followup-days" class="dash-input small" min="1" max="30" value="4">
+            </div>
+            <div class="setting-item" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+              <div style="display: flex; justify-content: space-between; width: 100%;">
+                <strong>Follow-Up Message Template</strong>
+                <div class="tags-group">
+                  <button class="tag-pill" data-insert-followup="{firstName}">+ {firstName}</button>
+                  <button class="tag-pill" data-insert-followup="{company}">+ {company}</button>
+                </div>
+              </div>
+              <textarea id="dash-followup-template-input" rows="3" class="code-textarea" style="width: 100%;" placeholder="Hi {firstName}, following up on my previous note. Hope you're having a productive week!"></textarea>
+            </div>
           </div>
         </div>
       </section>

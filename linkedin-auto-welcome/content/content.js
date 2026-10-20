@@ -619,6 +619,124 @@ function matchKeyword(text, keyword) {
   }
 }
 
+// Smart Company Extractor from LinkedIn Headline
+function extractCompany(headline) {
+  if (!headline) return '';
+  // Check for common patterns: " at Company", " @ Company", " with Company"
+  const atMatch = headline.match(/(?:at|@|with)\s+([A-Za-z0-9&.,'’\s\-]+?)(?=[|•—,]|$)/i);
+  if (atMatch && atMatch[1].trim().length > 1) {
+    return atMatch[1].trim();
+  }
+  // Check comma separation e.g. "Realtor-Associate, Vylla Home"
+  const commaParts = headline.split(',').map(p => p.trim());
+  if (commaParts.length > 1 && commaParts[1].length > 2 && commaParts[1].length < 40 && !commaParts[1].toLowerCase().includes('helping')) {
+    return commaParts[1];
+  }
+  // Check pipe or bullet separation
+  const parts = headline.split(/[|•—]/).map(p => p.trim());
+  if (parts.length > 1) {
+    for (let i = parts.length - 1; i >= 1; i--) {
+      if (parts[i].length > 2 && parts[i].length < 40 && !parts[i].toLowerCase().includes('helping') && !parts[i].toLowerCase().includes('buyer')) {
+        return parts[i];
+      }
+    }
+  }
+  return '';
+}
+
+// Multi-Variant & Spintax Message Resolver
+function resolveMessageTemplate(rawTemplate, conn) {
+  if (!rawTemplate) return '';
+
+  // 1. Full Message Variations (split by ---OR--- or ===VARIANT=== or \n---\n)
+  const variants = rawTemplate
+    .split(/(?:\r?\n\s*---OR---\s*\r?\n|\r?\n\s*===VARIANT===\s*\r?\n|\r?\n\s*---\s*\r?\n)/i)
+    .map(v => v.trim())
+    .filter(v => v.length > 0);
+
+  // Randomly pick one full message variant
+  let selected = variants.length > 1
+    ? variants[Math.floor(Math.random() * variants.length)]
+    : rawTemplate;
+
+  // 2. Resolve Spintax: {option 1|option 2|option 3}
+  let spintaxRegex = /\{([^{}]+?\|[^{}]+?)\}/g;
+  let safetyLimit = 10;
+  while (spintaxRegex.test(selected) && safetyLimit-- > 0) {
+    selected = selected.replace(spintaxRegex, (match, choices) => {
+      const options = choices.split('|');
+      return options[Math.floor(Math.random() * options.length)].trim();
+    });
+  }
+
+  // 3. Dynamic Tag Interpolation
+  const firstName = extractFirstName(conn.name);
+  const fullName = conn.name || '';
+  const headline = conn.headline || '';
+  const company = extractCompany(headline);
+
+  // Time of Day
+  const hour = new Date().getHours();
+  const timeOfDay = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+
+  // Day of Week
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayOfWeek = days[new Date().getDay()];
+
+  let personalized = selected
+    .replace(/\{firstName\}/gi, firstName)
+    .replace(/\{fullName\}/gi, fullName)
+    .replace(/\{headline\}/gi, headline)
+    .replace(/\{company\}/gi, company || 'your firm')
+    .replace(/\{timeOfDay\}/gi, timeOfDay)
+    .replace(/\{dayOfWeek\}/gi, dayOfWeek);
+
+  return personalized.trim();
+}
+
+// Robust Infinite Scroller for LinkedIn Lists
+async function triggerLinkedInInfiniteScroll() {
+  const cards = getConnectionCards();
+  if (cards.length > 0) {
+    const lastCard = cards[cards.length - 1]?.cardElement;
+    if (lastCard) {
+      lastCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }
+
+  // Scroll window and document
+  window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
+  if (document.scrollingElement) {
+    document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight;
+  }
+
+  // Scroll any scrollable parent containers on LinkedIn
+  const containers = document.querySelectorAll('main, .scaffold-layout__main, .scaffold-layout__list, .mn-connections, .artdeco-list');
+  for (const c of containers) {
+    if (c.scrollHeight > c.clientHeight) {
+      c.scrollTop = c.scrollHeight;
+    }
+  }
+
+  // Click any "Show more results" button if present
+  const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button'));
+  for (const b of allButtons) {
+    const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+    if (txt === 'show more results' || txt === 'show more' || txt === 'load more' || txt === 'see more') {
+      try { b.click(); } catch (e) {}
+    }
+  }
+
+  // Small scroll bounce to trigger IntersectionObserver
+  await sleep(1000);
+  window.scrollBy({ top: -300, behavior: 'smooth' });
+  await sleep(600);
+  window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
+
+  window.dispatchEvent(new Event('scroll'));
+  document.dispatchEvent(new Event('scroll'));
+}
+
 // Select appropriate template based on keyword rules
 function selectTemplate(conn, settings, convoContainer) {
   const rules = Array.isArray(settings.rules) ? settings.rules : [];
@@ -743,15 +861,13 @@ async function runAutoWelcomeSequence() {
       // If no unmessaged cards visible, scroll down to load more connections from LinkedIn
       if (unmessaged.length === 0) {
         consecutiveEmptyScrolls++;
-        if (consecutiveEmptyScrolls >= 3) {
-          console.log('[LAW] No more unmessaged connections found after 3 scroll attempts.');
+        if (consecutiveEmptyScrolls > 5) {
+          console.log('[LAW] No more unmessaged connections found after 5 scroll attempts.');
           break;
         }
 
-        updateHud(`Loading more connections from LinkedIn (scrolling down ${consecutiveEmptyScrolls}/3)...`, formatQuota(currentTodayCount, settings.dailyLimit));
-        window.scrollBy({ top: 800, behavior: 'smooth' });
-        await sleep(1500);
-        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+        updateHud(`Loading more connections from LinkedIn (scroll check ${consecutiveEmptyScrolls}/5)...`, formatQuota(currentTodayCount, settings.dailyLimit));
+        await triggerLinkedInInfiniteScroll();
         await sleep(2500);
         continue;
       }
@@ -823,11 +939,9 @@ async function runAutoWelcomeSequence() {
         }
       }
 
-      // Select template (keyword rule matching or default fallback)
+      // Select template (keyword rule matching or default fallback) with Spintax & Full Message Variations
       const ruleResult = selectTemplate(conn, settings, activeConvo);
-      const personalizedMessage = (ruleResult.template || settings.template || '')
-        .replace(/\{firstName\}/gi, firstName)
-        .replace(/\{fullName\}/gi, conn.name);
+      const personalizedMessage = resolveMessageTemplate(ruleResult.template || settings.template, conn);
 
       if (ruleResult.ruleName !== 'Default') {
         updateHud(`🎯 Matched "${ruleResult.ruleName}" (${ruleResult.matchedKeyword})! Typing message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
@@ -919,6 +1033,27 @@ async function runAutoWelcomeSequence() {
             stats: updatedStats,
             sentHistory: [newRecord, ...history].slice(0, 500)
           });
+
+          // Trigger free Webhook if configured
+          if (settings.webhookUrl && typeof settings.webhookUrl === 'string' && settings.webhookUrl.trim().startsWith('http')) {
+            try {
+              fetch(settings.webhookUrl.trim(), {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: conn.name,
+                  firstName: firstName,
+                  headline: conn.headline,
+                  company: extractCompany(conn.headline),
+                  profileUrl: conn.profileUrl,
+                  message: personalizedMessage,
+                  ruleMatched: ruleResult.ruleName !== 'Default' ? `${ruleResult.ruleName} [${ruleResult.matchedKeyword}]` : 'Default',
+                  sentAt: new Date().toISOString()
+                })
+              }).catch(err => console.warn('[LAW] Webhook delivery note:', err));
+            } catch (e) {}
+          }
         } catch (e) {
           console.error('[LAW] Failed to save record:', e);
         }
@@ -971,11 +1106,111 @@ async function runAutoWelcomeSequence() {
 }
 
 
+// Auto-Withdraw Sent Invitations older than 6 months
+async function runWithdrawOldInvitesSequence(minAgeMonths = 6) {
+  if (isRunning) return;
+  isRunning = true;
+  shouldStop = false;
+
+  updateHud('Starting invitation cleanup (> 6 months)...');
+  await sleep(1500);
+
+  // If not on sent invitations page, navigate there
+  if (!window.location.href.includes('/mynetwork/invitation-manager/sent')) {
+    updateHud('Navigating to Sent Invitations page...');
+    sessionStorage.setItem('law_pending_withdraw', '1');
+    window.location.href = 'https://www.linkedin.com/mynetwork/invitation-manager/sent/';
+    isRunning = false;
+    return;
+  }
+
+  let withdrawnCount = 0;
+  let emptyRounds = 0;
+
+  while (!shouldStop && emptyRounds < 4) {
+    const rows = Array.from(document.querySelectorAll('.invitation-card, li.invitation-card, [data-view-name*="invitation"], .artdeco-list__item'));
+    let foundInBatch = false;
+
+    for (const row of rows) {
+      if (shouldStop) break;
+
+      const rowText = (row.innerText || row.textContent || '').toLowerCase();
+      let isOld = false;
+      const monthMatch = rowText.match(/sent\s+(\d+)\s+month/i) || rowText.match(/(\d+)\s+month(?:s)?\s+ago/i);
+      const yearMatch = rowText.match(/sent\s+(\d+)\s+year/i) || rowText.match(/year/i);
+
+      if (yearMatch) {
+        isOld = true;
+      } else if (monthMatch && parseInt(monthMatch[1], 10) >= minAgeMonths) {
+        isOld = true;
+      }
+
+      if (isOld) {
+        foundInBatch = true;
+        const buttons = Array.from(row.querySelectorAll('button, a.artdeco-button'));
+        const withdrawBtn = buttons.find(b => {
+          const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').toLowerCase();
+          return t.includes('withdraw');
+        });
+
+        if (withdrawBtn) {
+          const personName = (row.querySelector('.invitation-card__title, h3, strong, a[href*="/in/"]')?.innerText || 'Member').trim();
+          updateHud(`Withdrawing invite to ${personName} (> 6 months old)...`);
+          withdrawBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await sleep(600);
+          withdrawBtn.click();
+          await sleep(1000);
+
+          // Confirm in dialog if modal appears
+          const modalBtn = Array.from(document.querySelectorAll('.artdeco-modal button, [role="dialog"] button')).find(b => {
+            const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+            return t === 'withdraw';
+          });
+          if (modalBtn) {
+            modalBtn.click();
+            await sleep(1000);
+          }
+
+          withdrawnCount++;
+          updateHud(`Withdrawn ${withdrawnCount} old invite(s)...`);
+          await sleep(1200);
+        }
+      }
+    }
+
+    if (!foundInBatch) {
+      emptyRounds++;
+      updateHud(`Checking for older invitations (scroll check ${emptyRounds}/4)...`);
+      window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
+      await sleep(2500);
+    } else {
+      emptyRounds = 0;
+      window.scrollBy({ top: 500, behavior: 'smooth' });
+      await sleep(1500);
+    }
+  }
+
+  const msg = shouldStop ? 'Withdrawal stopped by user.' : `Done! Withdrawn ${withdrawnCount} invitations older than 6 months.`;
+  updateHud(msg);
+  setTimeout(hideHud, 6000);
+  isRunning = false;
+}
+
 // Runtime message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'START_DOM_SCAN' || message.action === 'TRIGGER_BACKGROUND_CHECK') {
     if (!isRunning) {
       runAutoWelcomeSequence();
+      sendResponse({ success: true, started: true });
+    } else {
+      sendResponse({ success: true, alreadyRunning: true });
+    }
+    return true;
+  }
+
+  if (message.action === 'START_WITHDRAW_INVITES') {
+    if (!isRunning) {
+      runWithdrawOldInvitesSequence(message.minAgeMonths || 6);
       sendResponse({ success: true, started: true });
     } else {
       sendResponse({ success: true, alreadyRunning: true });
@@ -1013,6 +1248,16 @@ function checkAutoStartOnPageLoad() {
       setTimeout(() => {
         if (!isRunning) {
           runAutoWelcomeSequence();
+        }
+      }, 3000);
+    }
+  } else if (window.location.href.includes('/mynetwork/invitation-manager/sent')) {
+    if (sessionStorage.getItem('law_pending_withdraw') === '1') {
+      sessionStorage.removeItem('law_pending_withdraw');
+      console.log('[LAW] Pending invitation withdrawal detected. Starting in 3s...');
+      setTimeout(() => {
+        if (!isRunning) {
+          runWithdrawOldInvitesSequence(6);
         }
       }, 3000);
     }

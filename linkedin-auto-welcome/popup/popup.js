@@ -36,6 +36,7 @@ function initPopup() {
   const btnResetToday = document.getElementById('btn-reset-today');
   const quotaProgressFill = document.getElementById('quota-progress-fill');
   const btnTriggerScan = document.getElementById('btn-trigger-scan');
+  const btnWithdrawInvites = document.getElementById('btn-withdraw-invites');
   const btnStop = document.getElementById('btn-stop');
 
   // Tabs
@@ -57,6 +58,9 @@ function initPopup() {
   const settingMaxDelay = document.getElementById('setting-max-delay');
   const settingSkipExisting = document.getElementById('setting-skip-existing');
   const settingScanInterval = document.getElementById('setting-scan-interval');
+  const settingWebhookUrl = document.getElementById('setting-webhook-url');
+  const settingFollowupEnabled = document.getElementById('setting-followup-enabled');
+  const settingFollowupDays = document.getElementById('setting-followup-days');
   const btnSaveSettings = document.getElementById('btn-save-settings');
 
   // Logs tab
@@ -79,9 +83,15 @@ function initPopup() {
   function updatePreview() {
     if (!templateInput || !templatePreview) return;
     const raw = templateInput.value || '';
-    const sample = raw
+    // Show first variant if ---OR--- exists
+    const firstVariant = raw.split(/(?:\r?\n\s*---OR---\s*\r?\n|\r?\n\s*===VARIANT===\s*\r?\n)/i)[0];
+    const sample = firstVariant
       .replace(/\{firstName\}/gi, 'Sarah')
-      .replace(/\{fullName\}/gi, 'Sarah Jenkins');
+      .replace(/\{fullName\}/gi, 'Sarah Jenkins')
+      .replace(/\{company\}/gi, 'Compass Realty')
+      .replace(/\{timeOfDay\}/gi, 'Good morning')
+      .replace(/\{dayOfWeek\}/gi, 'Wednesday')
+      .replace(/\{headline\}/gi, 'Associate Broker');
     templatePreview.textContent = sample || '(Empty message)';
   }
 
@@ -123,12 +133,19 @@ function initPopup() {
         <div>
           <div class="form-header" style="margin-bottom: 4px;">
             <div class="sub-label">Message Template:</div>
-            <div class="variable-tags">
+            <div class="variable-tags" style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;">
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{firstName}">+ {firstName}</button>
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{fullName}">+ {fullName}</button>
+              <button type="button" class="tag-btn rule-tag-btn" data-tag="{company}">+ {company}</button>
+              <button type="button" class="tag-btn rule-tag-btn" data-tag="{timeOfDay}">+ {timeOfDay}</button>
+              <button type="button" class="tag-btn rule-tag-btn" data-tag="{dayOfWeek}">+ {dayOfWeek}</button>
+              <button type="button" class="tag-btn rule-tag-btn" data-tag="{headline}">+ {headline}</button>
             </div>
           </div>
           <textarea class="rule-template-input" rows="4" placeholder="Message template for this rule">${escapeHtml(rule.template || '')}</textarea>
+          <div style="font-size: 10.5px; color: #64748b; margin-top: 2px;">
+            💡 Tip: Separate full alternative messages with <code>---OR---</code> or use <code>{phrase 1|phrase 2}</code>!
+          </div>
         </div>
       `;
 
@@ -332,6 +349,19 @@ function initPopup() {
     });
   }
 
+  // Withdraw old invites button
+  if (btnWithdrawInvites) {
+    btnWithdrawInvites.addEventListener('click', async (e) => {
+      e.preventDefault();
+      showToast('Opening Sent Invitations to withdraw invites >6m...');
+      try {
+        await chrome.runtime.sendMessage({ action: 'START_WITHDRAW_INVITES', minAgeMonths: 6 });
+      } catch (err) {
+        chrome.tabs.create({ url: 'https://www.linkedin.com/mynetwork/invitation-manager/sent/' });
+      }
+    });
+  }
+
   // Save Settings button
   if (btnSaveSettings) {
     btnSaveSettings.addEventListener('click', async (e) => {
@@ -342,6 +372,9 @@ function initPopup() {
       const maxDelay = parseInt(settingMaxDelay.value, 10) || 45;
       const skipExistingChats = settingSkipExisting.checked;
       const autoScanInterval = parseInt(settingScanInterval.value, 10) || 60;
+      const webhookUrl = settingWebhookUrl ? settingWebhookUrl.value.trim() : '';
+      const followUpEnabled = settingFollowupEnabled ? settingFollowupEnabled.checked : false;
+      const followUpDays = parseInt(settingFollowupDays?.value, 10) || 4;
 
       if (minDelay >= maxDelay) {
         showToast('Min delay must be less than Max delay');
@@ -357,7 +390,10 @@ function initPopup() {
           minDelay,
           maxDelay,
           skipExistingChats,
-          autoScanInterval
+          autoScanInterval,
+          webhookUrl,
+          followUpEnabled,
+          followUpDays
         };
         await chrome.storage.local.set({ settings: updated });
         showToast('Settings saved successfully!');
@@ -547,6 +583,15 @@ function initPopup() {
       }
       if (settingScanInterval) {
         settingScanInterval.value = String(settings.autoScanInterval || 60);
+      }
+      if (settingWebhookUrl && document.activeElement !== settingWebhookUrl) {
+        settingWebhookUrl.value = settings.webhookUrl || '';
+      }
+      if (settingFollowupEnabled) {
+        settingFollowupEnabled.checked = Boolean(settings.followUpEnabled);
+      }
+      if (settingFollowupDays && document.activeElement !== settingFollowupDays) {
+        settingFollowupDays.value = settings.followUpDays || 4;
       }
 
       // Render Logs

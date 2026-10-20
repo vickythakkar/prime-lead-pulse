@@ -18,7 +18,11 @@ const DEFAULT_SETTINGS = {
   minDelay: 25,       // min delay between sends in seconds
   maxDelay: 45,       // max delay between sends in seconds
   skipExistingChats: true,
-  autoScanInterval: 60 // minutes between automatic checks
+  autoScanInterval: 60, // minutes between automatic checks
+  webhookUrl: "",     // optional webhook endpoint (Zapier, Make, Google Sheets)
+  followUpEnabled: false,
+  followUpDays: 4,
+  followUpTemplate: "Hi {firstName}, following up on my previous note. Hope you're having a great week!"
 };
 
 function getTodayString() {
@@ -203,6 +207,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await chrome.storage.local.set({ stats: updatedStats });
         await updateBadge(0, settings.dailyLimit);
         sendResponse({ success: true, stats: updatedStats });
+        return;
+      }
+
+      if (message.action === 'START_WITHDRAW_INVITES') {
+        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/mynetwork/invitation-manager/sent/*' });
+        let targetTabId;
+
+        if (tabs.length > 0) {
+          targetTabId = tabs[0].id;
+          await chrome.tabs.update(targetTabId, { active: true });
+        } else {
+          const newTab = await chrome.tabs.create({
+            url: 'https://www.linkedin.com/mynetwork/invitation-manager/sent/',
+            active: true
+          });
+          targetTabId = newTab.id;
+        }
+
+        setTimeout(async () => {
+          try {
+            await chrome.tabs.sendMessage(targetTabId, { action: 'START_WITHDRAW_INVITES', minAgeMonths: 6 });
+          } catch (err) {}
+        }, 3000);
+
+        sendResponse({ success: true, tabId: targetTabId });
         return;
       }
 
