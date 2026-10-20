@@ -726,32 +726,39 @@ async function runAutoWelcomeSequence() {
     updateHud(`Found ${connections.length} connections. Checking history...`, formatQuota(stats.todayCount, settings.dailyLimit));
     await sleep(1000);
 
-    const unmessaged = connections.filter(c => !sentMap.has(c.profileUrl));
-
-    if (unmessaged.length === 0) {
-      updateHud(`All ${connections.length} visible connections have already received messages! ✅`, formatQuota(stats.todayCount, settings.dailyLimit));
-      await chrome.runtime.sendMessage({
-        action: 'UPDATE_RUNTIME_STATE',
-        state: { isProcessing: false, currentStatus: 'All visible connections already messaged', lastRunTime: new Date().toISOString() }
-      });
-      setTimeout(hideHud, 5000);
-      isRunning = false;
-      return;
-    }
-
-    updateHud(`Ready to message ${unmessaged.length} newly accepted connection(s)...`, formatQuota(stats.todayCount, settings.dailyLimit));
-    await sleep(1200);
-
     let processedInSession = 0;
     let currentTodayCount = stats.todayCount;
+    let consecutiveEmptyScrolls = 0;
 
-    for (const conn of unmessaged) {
-      if (shouldStop) break;
-
+    while (!shouldStop) {
       if (!isUnlimited && currentTodayCount >= Number(settings.dailyLimit)) {
         updateHud(`Daily safety limit reached (${currentTodayCount}/${settings.dailyLimit}). Stopping for today.`);
         break;
       }
+
+      // Check current cards in DOM
+      const currentConnections = getConnectionCards();
+      const unmessaged = currentConnections.filter(c => !sentMap.has(c.profileUrl));
+
+      // If no unmessaged cards visible, scroll down to load more connections from LinkedIn
+      if (unmessaged.length === 0) {
+        consecutiveEmptyScrolls++;
+        if (consecutiveEmptyScrolls >= 3) {
+          console.log('[LAW] No more unmessaged connections found after 3 scroll attempts.');
+          break;
+        }
+
+        updateHud(`Loading more connections from LinkedIn (scrolling down ${consecutiveEmptyScrolls}/3)...`, formatQuota(currentTodayCount, settings.dailyLimit));
+        window.scrollBy({ top: 800, behavior: 'smooth' });
+        await sleep(1500);
+        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+        await sleep(2500);
+        continue;
+      }
+
+      // Reset scroll counter when unmessaged cards are available
+      consecutiveEmptyScrolls = 0;
+      const conn = unmessaged[0];
 
       // Close any stray open chat before opening next
       closeAllOpenChats();
@@ -777,6 +784,7 @@ async function runAutoWelcomeSequence() {
       if (!convoResult) {
         updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
         console.warn('[LAW] Could not locate conversation window for', conn.name);
+        sentMap.add(conn.profileUrl);
         await sleep(1000);
         continue;
       }
@@ -833,6 +841,7 @@ async function runAutoWelcomeSequence() {
       if (!typed) {
         updateHud(`⚠️ Could not type for ${firstName}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
         console.warn('[LAW] Could not type message for', conn.name);
+        sentMap.add(conn.profileUrl);
         closeConversationWindow(activeConvo);
         await sleep(500);
         closeAllOpenChats();
@@ -931,6 +940,7 @@ async function runAutoWelcomeSequence() {
         }
       } else {
         console.warn('[LAW] Send button was not active for', conn.name);
+        sentMap.add(conn.profileUrl);
         closeConversationWindow(activeConvo);
         await sleep(500);
         closeAllOpenChats();
