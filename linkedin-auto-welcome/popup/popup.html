@@ -39,7 +39,10 @@
           <span class="status-dot" id="status-dot"></span>
           <span class="status-text" id="status-text">Ready</span>
         </div>
-        <div class="quota-badge" id="quota-badge">Today: 0 / 15</div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <div class="quota-badge" id="quota-badge">Today: 0 / 15</div>
+          <button id="btn-reset-today" class="reset-today-btn" title="Reset Today's message count to 0">↺</button>
+        </div>
       </div>
       <div class="progress-bar-bg">
         <div class="progress-bar-fill" id="quota-progress-fill" style="width: 0%;"></div>
@@ -113,10 +116,10 @@
     <div class="tab-pane" id="pane-settings">
       <div class="setting-row">
         <div class="setting-info">
-          <span class="setting-title">Daily Safety Cap</span>
-          <span class="setting-desc">Max messages per 24 hours</span>
+          <span class="setting-title">Daily Send Cap</span>
+          <span class="setting-desc">Max messages per 24h (0 = Unlimited / No Limit)</span>
         </div>
-        <input type="number" id="setting-daily-limit" class="num-input" min="1" max="50" value="15">
+        <input type="number" id="setting-daily-limit" class="num-input" min="0" max="99999" value="15" placeholder="0 = ∞">
       </div>
 
       <div class="setting-row">

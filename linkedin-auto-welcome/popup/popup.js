@@ -33,6 +33,7 @@ function initPopup() {
   const statusDot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
   const quotaBadge = document.getElementById('quota-badge');
+  const btnResetToday = document.getElementById('btn-reset-today');
   const quotaProgressFill = document.getElementById('quota-progress-fill');
   const btnTriggerScan = document.getElementById('btn-trigger-scan');
   const btnStop = document.getElementById('btn-stop');
@@ -314,11 +315,29 @@ function initPopup() {
     });
   }
 
+  // Reset Today's Count button
+  if (btnResetToday) {
+    btnResetToday.addEventListener('click', async (e) => {
+      e.preventDefault();
+      try {
+        await chrome.runtime.sendMessage({ action: 'RESET_TODAY_COUNT' });
+        showToast("Today's count reset to 0!");
+        await syncStateFromStorage();
+      } catch (err) {
+        const { stats = {} } = await chrome.storage.local.get('stats');
+        await chrome.storage.local.set({ stats: { ...stats, todayCount: 0 } });
+        showToast("Today's count reset to 0!");
+        await syncStateFromStorage();
+      }
+    });
+  }
+
   // Save Settings button
   if (btnSaveSettings) {
     btnSaveSettings.addEventListener('click', async (e) => {
       e.preventDefault();
-      const dailyLimit = parseInt(settingDailyLimit.value, 10) || 15;
+      const rawDaily = parseInt(settingDailyLimit.value, 10);
+      const dailyLimit = isNaN(rawDaily) || rawDaily <= 0 ? 0 : rawDaily;
       const minDelay = parseInt(settingMinDelay.value, 10) || 25;
       const maxDelay = parseInt(settingMaxDelay.value, 10) || 45;
       const skipExistingChats = settingSkipExisting.checked;
@@ -470,7 +489,11 @@ function initPopup() {
       // Master switch
       if (masterToggle) masterToggle.checked = Boolean(settings.enabled);
 
-      // Status Indicator
+      // Status Indicator & Quota
+      const todayCount = stats.todayCount || 0;
+      const limit = Number(settings.dailyLimit);
+      const isUnlimited = isNaN(limit) || limit <= 0;
+
       if (statusDot && statusText) {
         if (!settings.enabled) {
           statusDot.className = 'status-dot paused';
@@ -482,18 +505,18 @@ function initPopup() {
           if (btnStop) btnStop.classList.remove('hidden');
         } else {
           statusDot.className = 'status-dot';
-          statusText.textContent = stats.todayCount >= settings.dailyLimit ? 'Daily limit reached' : 'Ready';
+          statusText.textContent = (!isUnlimited && todayCount >= limit) ? 'Daily limit reached' : 'Ready';
           if (btnTriggerScan) btnTriggerScan.classList.remove('hidden');
           if (btnStop) btnStop.classList.add('hidden');
         }
       }
 
       // Quota Counter & Fill
-      const todayCount = stats.todayCount || 0;
-      const limit = settings.dailyLimit || 15;
-      if (quotaBadge) quotaBadge.textContent = `Today: ${todayCount} / ${limit}`;
+      if (quotaBadge) {
+        quotaBadge.textContent = isUnlimited ? `Today: ${todayCount} (Unlimited)` : `Today: ${todayCount} / ${limit}`;
+      }
       if (quotaProgressFill) {
-        const pct = Math.min(100, Math.round((todayCount / limit) * 100));
+        const pct = isUnlimited ? 100 : Math.min(100, Math.round((todayCount / limit) * 100));
         quotaProgressFill.style.width = `${pct}%`;
       }
 
@@ -511,7 +534,7 @@ function initPopup() {
       }
 
       if (settingDailyLimit && document.activeElement !== settingDailyLimit) {
-        settingDailyLimit.value = settings.dailyLimit || 15;
+        settingDailyLimit.value = isUnlimited ? 0 : limit;
       }
       if (settingMinDelay && document.activeElement !== settingMinDelay) {
         settingMinDelay.value = settings.minDelay || 25;

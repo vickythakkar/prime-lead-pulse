@@ -70,7 +70,10 @@
         <!-- Stat Cards -->
         <div class="stats-grid">
           <div class="stat-card">
-            <span class="stat-label">Sent Today</span>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="stat-label">Sent Today</span>
+              <button id="btn-dash-reset-today" class="btn btn-outline small" style="padding: 2px 8px; font-size: 11px; cursor: pointer;" title="Reset today's message counter to 0">↺ Reset Count</button>
+            </div>
             <div class="stat-val" id="stat-today">0</div>
             <span class="stat-sub" id="stat-today-sub">Daily limit: 15</span>
           </div>
@@ -167,9 +170,9 @@
             <div class="setting-item">
               <div>
                 <strong>Daily Maximum Send Limit</strong>
-                <p>Safety cap on how many welcome messages can be sent in a 24-hour cycle. We recommend 15–20 max.</p>
+                <p>Safety cap on how many welcome messages can be sent in a 24-hour cycle. Enter 0 for Unlimited / No Limit.</p>
               </div>
-              <input type="number" id="dash-setting-daily" class="dash-input" min="1" max="50" value="15">
+              <input type="number" id="dash-setting-daily" class="dash-input" min="0" max="99999" placeholder="0 = Unlimited" value="15">
             </div>
 
             <div class="setting-item">

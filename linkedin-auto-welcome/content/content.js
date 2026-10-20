@@ -654,6 +654,11 @@ function selectTemplate(conn, settings, convoContainer) {
   };
 }
 
+function formatQuota(todayCount, dailyLimit) {
+  const isUnlim = !dailyLimit || Number(dailyLimit) <= 0;
+  return isUnlim ? `Today: ${todayCount} (Unlimited)` : `Today: ${todayCount}/${dailyLimit}`;
+}
+
 // Main Automation Sequence
 async function runAutoWelcomeSequence() {
   if (isRunning) return;
@@ -670,7 +675,9 @@ async function runAutoWelcomeSequence() {
       return;
     }
 
-    if (stats.todayCount >= settings.dailyLimit) {
+    const isUnlimited = !settings.dailyLimit || Number(settings.dailyLimit) <= 0;
+
+    if (!isUnlimited && stats.todayCount >= Number(settings.dailyLimit)) {
       updateHud(`Daily limit reached (${stats.todayCount}/${settings.dailyLimit}). Pausing until tomorrow.`);
       setTimeout(hideHud, 5000);
       isRunning = false;
@@ -681,7 +688,8 @@ async function runAutoWelcomeSequence() {
     const currentUrl = window.location.href;
     if (!currentUrl.includes('/mynetwork/invite-connect/connections')) {
       updateHud('Navigating to your Connections page...');
-      window.location.href = 'https://www.linkedin.com/mynetwork/invite-connect/connections/';
+      sessionStorage.setItem('law_pending_scan', '1');
+      window.location.href = 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1';
       isRunning = false;
       return;
     }
@@ -690,7 +698,7 @@ async function runAutoWelcomeSequence() {
     closeAllOpenChats();
     await sleep(600);
 
-    updateHud('Detecting connections on page...', `Today: ${stats.todayCount}/${settings.dailyLimit}`);
+    updateHud('Detecting connections on page...', formatQuota(stats.todayCount, settings.dailyLimit));
     await sleep(1000);
 
     // Map existing sent history
@@ -715,13 +723,13 @@ async function runAutoWelcomeSequence() {
       return;
     }
 
-    updateHud(`Found ${connections.length} connections. Checking history...`, `Today: ${stats.todayCount}/${settings.dailyLimit}`);
+    updateHud(`Found ${connections.length} connections. Checking history...`, formatQuota(stats.todayCount, settings.dailyLimit));
     await sleep(1000);
 
     const unmessaged = connections.filter(c => !sentMap.has(c.profileUrl));
 
     if (unmessaged.length === 0) {
-      updateHud(`All ${connections.length} visible connections have already received messages! ✅`, `Today: ${stats.todayCount}/${settings.dailyLimit}`);
+      updateHud(`All ${connections.length} visible connections have already received messages! ✅`, formatQuota(stats.todayCount, settings.dailyLimit));
       await chrome.runtime.sendMessage({
         action: 'UPDATE_RUNTIME_STATE',
         state: { isProcessing: false, currentStatus: 'All visible connections already messaged', lastRunTime: new Date().toISOString() }
@@ -731,7 +739,7 @@ async function runAutoWelcomeSequence() {
       return;
     }
 
-    updateHud(`Ready to message ${unmessaged.length} newly accepted connection(s)...`, `Today: ${stats.todayCount}/${settings.dailyLimit}`);
+    updateHud(`Ready to message ${unmessaged.length} newly accepted connection(s)...`, formatQuota(stats.todayCount, settings.dailyLimit));
     await sleep(1200);
 
     let processedInSession = 0;
@@ -740,7 +748,7 @@ async function runAutoWelcomeSequence() {
     for (const conn of unmessaged) {
       if (shouldStop) break;
 
-      if (currentTodayCount >= settings.dailyLimit) {
+      if (!isUnlimited && currentTodayCount >= Number(settings.dailyLimit)) {
         updateHud(`Daily safety limit reached (${currentTodayCount}/${settings.dailyLimit}). Stopping for today.`);
         break;
       }
@@ -750,7 +758,7 @@ async function runAutoWelcomeSequence() {
       await sleep(400);
 
       const firstName = extractFirstName(conn.name);
-      updateHud(`Opening chat with ${conn.name}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      updateHud(`Opening chat with ${conn.name}...`, formatQuota(currentTodayCount, settings.dailyLimit));
 
       // Scroll card into view
       conn.cardElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -767,7 +775,7 @@ async function runAutoWelcomeSequence() {
       const convoResult = await waitForConversationWindow(conn.name);
 
       if (!convoResult) {
-        updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
         console.warn('[LAW] Could not locate conversation window for', conn.name);
         await sleep(1000);
         continue;
@@ -783,7 +791,7 @@ async function runAutoWelcomeSequence() {
         );
 
         if (actualMessages && actualMessages.length > 0) {
-          updateHud(`Skipping ${conn.name} (prior chat history detected)...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+          updateHud(`Skipping ${conn.name} (prior chat history detected)...`, formatQuota(currentTodayCount, settings.dailyLimit));
           const local = await chrome.storage.local.get('sentHistory');
           const history = local.sentHistory || [];
           const record = {
@@ -814,16 +822,16 @@ async function runAutoWelcomeSequence() {
         .replace(/\{fullName\}/gi, conn.name);
 
       if (ruleResult.ruleName !== 'Default') {
-        updateHud(`🎯 Matched "${ruleResult.ruleName}" (${ruleResult.matchedKeyword})! Typing message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        updateHud(`🎯 Matched "${ruleResult.ruleName}" (${ruleResult.matchedKeyword})! Typing message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
       } else {
-        updateHud(`Found chat! Typing default message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        updateHud(`Found chat! Typing default message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
       }
 
       // Type the message into the Draft.js editor
       const typed = await typeIntoReactInput(textBox, personalizedMessage);
 
       if (!typed) {
-        updateHud(`⚠️ Could not type for ${firstName}. Skipping...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        updateHud(`⚠️ Could not type for ${firstName}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
         console.warn('[LAW] Could not type message for', conn.name);
         closeConversationWindow(activeConvo);
         await sleep(500);
@@ -832,7 +840,7 @@ async function runAutoWelcomeSequence() {
         continue;
       }
 
-      updateHud(`✏️ Message typed for ${firstName}! Locating Send button...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+      updateHud(`✏️ Message typed for ${firstName}! Locating Send button...`, formatQuota(currentTodayCount, settings.dailyLimit));
       await sleep(1000);
 
       if (shouldStop) {
@@ -858,7 +866,7 @@ async function runAutoWelcomeSequence() {
         const hasText = textBox.textContent && textBox.textContent.trim().length > 0;
         if (fallbackBtn && hasText) {
           console.log('[LAW] Force-enabling send button. Text present:', textBox.textContent.trim().substring(0, 40));
-          updateHud(`⚡ Sending message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+          updateHud(`⚡ Sending message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
           fallbackBtn.removeAttribute('aria-disabled');
           fallbackBtn.disabled = false;
           sendBtn = fallbackBtn;
@@ -866,7 +874,7 @@ async function runAutoWelcomeSequence() {
       }
 
       if (sendBtn) {
-        updateHud(`🚀 Sending message to ${firstName}...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+        updateHud(`🚀 Sending message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
         sendBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
         sendBtn.focus();
         sendBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -918,7 +926,7 @@ async function runAutoWelcomeSequence() {
 
         for (let s = totalDelaySec; s > 0; s--) {
           if (shouldStop) break;
-          updateHud(`Sent to ${firstName}! Resting naturally...`, `Today: ${currentTodayCount}/${settings.dailyLimit}`, s);
+          updateHud(`Sent to ${firstName}! Resting naturally...`, formatQuota(currentTodayCount, settings.dailyLimit), s);
           await sleep(1000);
         }
       } else {
@@ -935,7 +943,7 @@ async function runAutoWelcomeSequence() {
       ? 'Automation stopped by user.'
       : `Done! Sent ${processedInSession} welcome messages.`;
 
-    updateHud(finishMsg, `Today: ${currentTodayCount}/${settings.dailyLimit}`);
+    updateHud(finishMsg, formatQuota(currentTodayCount, settings.dailyLimit));
     await chrome.runtime.sendMessage({
       action: 'UPDATE_RUNTIME_STATE',
       state: { isProcessing: false, currentStatus: finishMsg, lastRunTime: new Date().toISOString() }
@@ -976,3 +984,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 });
+
+// Automatic scanner trigger on page load when navigating or flagged
+function checkAutoStartOnPageLoad() {
+  if (window.location.href.includes('/mynetwork/invite-connect/connections')) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const hasParam = urlParams.get('law_auto') === '1';
+    const hasSession = sessionStorage.getItem('law_pending_scan') === '1';
+
+    if (hasParam || hasSession) {
+      sessionStorage.removeItem('law_pending_scan');
+      try {
+        const cleanUrl = window.location.href.replace(/[?&]law_auto=1/, '');
+        window.history.replaceState({}, document.title, cleanUrl);
+      } catch (e) {}
+
+      console.log('[LAW] Auto-start detected on connections page load. Starting in 3s...');
+      setTimeout(() => {
+        if (!isRunning) {
+          runAutoWelcomeSequence();
+        }
+      }, 3000);
+    }
+  }
+}
+
+// Initialize on page load
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', checkAutoStartOnPageLoad);
+} else {
+  checkAutoStartOnPageLoad();
+}

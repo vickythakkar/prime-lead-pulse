@@ -97,8 +97,9 @@ async function updateBadge(todayCount, dailyLimit) {
   try {
     const text = todayCount > 0 ? `${todayCount}` : '';
     await chrome.action.setBadgeText({ text });
+    const isUnlimited = !dailyLimit || Number(dailyLimit) <= 0;
     await chrome.action.setBadgeBackgroundColor({
-      color: todayCount >= dailyLimit ? '#E02424' : '#0A66C2'
+      color: (!isUnlimited && todayCount >= dailyLimit) ? '#E02424' : '#0A66C2'
     });
   } catch (err) {
     // Ignore badge error if action not ready
@@ -112,13 +113,15 @@ chrome.alarms.addListener(async (alarm) => {
   const { settings, stats, runtimeState } = await getStorageData();
 
   if (!settings.enabled) return;
-  if (stats.todayCount >= settings.dailyLimit) return;
+  const isUnlimited = !settings.dailyLimit || Number(settings.dailyLimit) <= 0;
+  if (!isUnlimited && stats.todayCount >= Number(settings.dailyLimit)) return;
   if (runtimeState.isProcessing) return;
 
   // Check if a LinkedIn tab is open to safely perform background scan
   const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/*' });
   if (tabs && tabs.length > 0) {
-    const targetTab = tabs[0];
+    const connTab = tabs.find(t => t.url && t.url.includes('/connections'));
+    const targetTab = connTab || tabs[0];
     try {
       await chrome.tabs.sendMessage(targetTab.id, { action: 'TRIGGER_BACKGROUND_CHECK' });
     } catch (e) {
@@ -191,6 +194,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'CLEAR_HISTORY') {
         await chrome.storage.local.set({ sentHistory: [] });
         sendResponse({ success: true });
+        return;
+      }
+
+      if (message.action === 'RESET_TODAY_COUNT') {
+        const { stats, settings } = await getStorageData();
+        const updatedStats = { ...stats, todayCount: 0 };
+        await chrome.storage.local.set({ stats: updatedStats });
+        await updateBadge(0, settings.dailyLimit);
+        sendResponse({ success: true, stats: updatedStats });
         return;
       }
 

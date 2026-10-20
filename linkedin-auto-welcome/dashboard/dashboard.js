@@ -35,6 +35,7 @@ function initDashboard() {
   // Stats Elements
   const statToday = document.getElementById('stat-today');
   const statTodaySub = document.getElementById('stat-today-sub');
+  const btnDashResetToday = document.getElementById('btn-dash-reset-today');
   const statTotal = document.getElementById('stat-total');
   const statStatus = document.getElementById('stat-status');
   const statLastRun = document.getElementById('stat-last-run');
@@ -365,11 +366,32 @@ function initDashboard() {
     });
   }
 
+  // Reset Today's Count button
+  if (btnDashResetToday) {
+    btnDashResetToday.addEventListener('click', async (e) => {
+      e.preventDefault();
+      try {
+        await chrome.runtime.sendMessage({ action: 'RESET_TODAY_COUNT' });
+        showToast("Today's message counter reset to 0");
+        await syncDashboard();
+      } catch (err) {
+        const today = getTodayString();
+        const { stats = {} } = await chrome.storage.local.get('stats');
+        stats.todayCount = 0;
+        stats.lastResetDate = today;
+        await chrome.storage.local.set({ stats });
+        showToast("Today's message counter reset to 0");
+        await syncDashboard();
+      }
+    });
+  }
+
   // Save Settings
   if (btnDashSaveSettings) {
     btnDashSaveSettings.addEventListener('click', async (e) => {
       e.preventDefault();
-      const dailyLimit = parseInt(dashSettingDaily.value, 10) || 15;
+      const rawDaily = parseInt(dashSettingDaily.value, 10);
+      const dailyLimit = isNaN(rawDaily) || rawDaily <= 0 ? 0 : rawDaily;
       const minDelay = parseInt(dashSettingMinDelay.value, 10) || 25;
       const maxDelay = parseInt(dashSettingMaxDelay.value, 10) || 45;
       const skipExistingChats = dashSettingSkipExisting.checked;
@@ -529,10 +551,14 @@ function initDashboard() {
         lastRunTime: null
       };
 
+      const todayCount = stats.todayCount || 0;
+      const limit = Number(settings.dailyLimit);
+      const isUnlimited = isNaN(limit) || limit <= 0;
+
       if (dashMasterToggle) dashMasterToggle.checked = Boolean(settings.enabled);
 
-      if (statToday) statToday.textContent = stats.todayCount || 0;
-      if (statTodaySub) statTodaySub.textContent = `Daily limit: ${settings.dailyLimit || 15}`;
+      if (statToday) statToday.textContent = todayCount;
+      if (statTodaySub) statTodaySub.textContent = isUnlimited ? 'Daily limit: Unlimited' : `Daily limit: ${limit}`;
       if (statTotal) statTotal.textContent = stats.totalSent || 0;
 
       if (statStatus) {
@@ -569,7 +595,7 @@ function initDashboard() {
       }
 
       if (dashSettingDaily && document.activeElement !== dashSettingDaily) {
-        dashSettingDaily.value = settings.dailyLimit || 15;
+        dashSettingDaily.value = isUnlimited ? 0 : limit;
       }
       if (dashSettingMinDelay && document.activeElement !== dashSettingMinDelay) {
         dashSettingMinDelay.value = settings.minDelay || 25;
