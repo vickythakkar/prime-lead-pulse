@@ -1,1 +1,11 @@
-[{"id":1,"priority":1,"action":{"type":"block"},"condition":{"urlFilter":"api/track/pixel/","resourceTypes":["image","main_frame","sub_frame","xmlhttprequest","other"]}},{"id":2,"priority":1,"action":{"type":"block"},"condition":{"urlFilter":"api/track/link/","resourceTypes":["main_frame","sub_frame","xmlhttprequest","other"]}}]
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "api/track/pixel/",
+      "resourceTypes": ["image", "xmlhttprequest", "other"]
+    }
+  }
+]

@@ -205,15 +205,17 @@ function getActiveSenderEmail(composeWindow) {
       const match = fromInput.value.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
       if (match) return match[1];
     }
-    const fromOption = composeWindow.querySelector('.J-JN-M-I[role="option"], span[email]');
-    if (fromOption) {
-      const em = fromOption.getAttribute('email') || fromOption.textContent;
+    const fromContainer = composeWindow.querySelector('.az9, tr:has([name="from"]), [aria-label*="Send as" i]');
+    if (fromContainer) {
+      const em = fromContainer.querySelector('[data-hovercard-id]')?.getAttribute('data-hovercard-id') ||
+                 fromContainer.querySelector('[email]')?.getAttribute('email') ||
+                 fromContainer.textContent;
       const match = (em || '').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
       if (match) return match[1];
     }
   }
 
-  const accountBtn = document.querySelector('a[aria-label*="@"], button[aria-label*="@"], [aria-label*="Google Account"]');
+  const accountBtn = document.querySelector('a[aria-label*="@"], button[aria-label*="@"], [aria-label*="Google Account" i]');
   if (accountBtn) {
     const label = accountBtn.getAttribute('aria-label') || '';
     const match = label.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
@@ -837,38 +839,46 @@ document.addEventListener('click', async (e) => {
 
   const btn = isSend.closest('[role="button"]') || isSend;
   const senderEmail = getActiveSenderEmail(compose) || 'unknown';
-  const chipElements = Array.from(compose.querySelectorAll('[data-hovercard-id], div[email], span[email], .vR, .vN'));
-  const recipients = [];
+  const chipElements = Array.from(compose.querySelectorAll('.vR, [data-hovercard-id], div[email]'));
+  const emailMap = new Map();
   const contactUpdates = {};
 
   chipElements.forEach(chip => {
-    const em = chip.getAttribute('data-hovercard-id') || 
-               chip.getAttribute('email') || 
-               chip.querySelector('[data-hovercard-id]')?.getAttribute('data-hovercard-id') ||
-               chip.querySelector('[email]')?.getAttribute('email') || '';
+    const em = (chip.getAttribute('data-hovercard-id') || 
+                chip.getAttribute('email') || 
+                chip.querySelector('[data-hovercard-id]')?.getAttribute('data-hovercard-id') ||
+                chip.querySelector('[email]')?.getAttribute('email') || '').trim();
     if (!em || !em.includes('@')) return;
+    const cleanEm = em.toLowerCase();
 
     let nm = chip.getAttribute('name') || 
              chip.querySelector('[name]')?.getAttribute('name') || '';
     
     if (!nm) {
       const clone = chip.cloneNode(true);
-      clone.querySelectorAll('[role="button"], [aria-label*="Delete"], [aria-label*="Remove"], .vM').forEach(el => el.remove());
+      clone.querySelectorAll('[role="button"], [aria-label*="Delete" i], [aria-label*="Remove" i], .vM').forEach(el => el.remove());
       const txt = clone.textContent.trim();
       if (txt && !txt.includes('@') && txt.length >= 2) {
-        nm = txt;
+        nm = txt.replace(/\s*\([^)]*@?[^)]*\)/g, '').trim();
       }
     }
 
-    if (nm && em) {
-      contactUpdates[em.toLowerCase()] = nm;
-      recipients.push(`${nm} <${em}>`);
-    } else {
-      recipients.push(em);
+    if (!emailMap.has(cleanEm) || (!emailMap.get(cleanEm).name && nm)) {
+      emailMap.set(cleanEm, { name: nm, rawEmail: em });
+      if (nm) contactUpdates[cleanEm] = nm;
     }
   });
 
-  let recipient = [...new Set(recipients)].join(', ');
+  const formattedRecipients = [];
+  for (const [em, info] of emailMap.entries()) {
+    if (info.name) {
+      formattedRecipients.push(`${info.name} <${info.rawEmail}>`);
+    } else {
+      formattedRecipients.push(info.rawEmail);
+    }
+  }
+
+  let recipient = formattedRecipients.join(', ');
   if (!recipient) {
     recipient = compose.querySelector('input[name="to"]')?.value || 'Unknown Recipient';
   }
@@ -895,12 +905,39 @@ document.addEventListener('click', async (e) => {
 
       // Prevent double-wrapping of links in quoted text by restoring their original URLs first
       body.querySelectorAll('a').forEach(a => {
-        if (a.href.includes('/api/track/link/')) {
+        if (a.href && a.href.includes('/api/track/link/')) {
           try {
             const urlParam = new URL(a.href).searchParams.get('url');
             if (urlParam) a.href = decodeURIComponent(urlParam);
           } catch (e) {}
         }
+      });
+
+      // Auto-convert plain text URLs to <a> tags so they can be tracked
+      const treeWalker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);
+      const nodesToReplace = [];
+      const urlRegex = /(https?:\/\/[^\s<]+)/g;
+      while (treeWalker.nextNode()) {
+        const node = treeWalker.currentNode;
+        if (node.parentNode && (node.parentNode.tagName === 'A' || node.parentNode.closest('a'))) continue;
+        if (node.textContent && node.textContent.includes('/api/track/link/')) continue;
+        if (urlRegex.test(node.textContent)) nodesToReplace.push(node);
+      }
+      nodesToReplace.forEach(node => {
+        const span = document.createElement('span');
+        span.innerHTML = node.textContent.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+        node.parentNode.replaceChild(span, node);
+      });
+
+      // Wrap all <a> links with our tracking endpoint
+      body.querySelectorAll('a').forEach(a => {
+        const rawHref = a.getAttribute('href') || a.href;
+        if (!rawHref) return;
+        const skipProtocols = ['mailto:', 'tel:', 'javascript:', '#'];
+        if (skipProtocols.some(p => rawHref.startsWith(p))) return;
+        if (rawHref.includes('/api/track/link/')) return;
+        
+        a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(rawHref)}`;
       });
 
       const pixel = document.createElement('img');
@@ -912,7 +949,7 @@ document.addEventListener('click', async (e) => {
       body.appendChild(pixel);
     }
   } catch (err) {
-    console.error('Prime Lead Pulse: Error injecting pixel', err);
+    console.error('Prime Lead Pulse: Error injecting pixel/links', err);
   }
 
   // OPTIMISTIC CACHE UPDATE:

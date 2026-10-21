@@ -360,17 +360,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 function getFriendlyRecipientName(rawRecipient, contactNames) {
   if (!rawRecipient) return 'Someone';
 
+  // If there are multiple comma-separated recipients, check how many unique
+  const list = rawRecipient.split(',').map(s => s.trim()).filter(Boolean);
+  if (list.length > 1) {
+    const emails = new Set(list.map(r => r.replace(/.*<([^>]+)>.*/, '$1').replace(/[<>]/g, '').trim().toLowerCase()));
+    if (emails.size > 1) return 'Someone';
+  }
+
+  const single = list[0] || rawRecipient;
+
   // 1. If format is "Tyler Durden <Tyler.Primerealops@gmail.com>", extract "Tyler Durden"
-  const nameMatch = rawRecipient.match(/^([^<]+)<[^>]+>/);
+  const nameMatch = single.match(/^([^<]+)<[^>]+>/);
   if (nameMatch && nameMatch[1].trim()) {
-    const parsedName = nameMatch[1].trim();
-    if (!parsedName.includes('@')) return parsedName;
+    let parsedName = nameMatch[1].trim();
+    parsedName = parsedName.replace(/\s*\([^)]*@?[^)]*\)/g, '').trim();
+    if (!parsedName.includes('@') && parsedName.length >= 2) return parsedName;
   }
 
   // 2. Check contactNames dictionary
-  const cleanEmail = rawRecipient.replace(/.*<([^>]+)>.*/, '$1').replace(/[<>]/g, '').trim().toLowerCase();
+  const cleanEmail = single.replace(/.*<([^>]+)>.*/, '$1').replace(/[<>]/g, '').trim().toLowerCase();
   if (contactNames && contactNames[cleanEmail]) {
-    return contactNames[cleanEmail];
+    return contactNames[cleanEmail].replace(/\s*\([^)]*@?[^)]*\)/g, '').trim();
   }
 
   // 3. Fallback: Parse name from email username if dotted (e.g. "tyler.durden@..." or "tyler.primerealops@...")
@@ -382,7 +392,7 @@ function getFriendlyRecipientName(rawRecipient, contactNames) {
     }
   }
 
-  return rawRecipient;
+  return single.replace(/\s*\([^)]*@?[^)]*\)/g, '').trim();
 }
 
 async function triggerNotificationsForEvents(eventsWithEmail) {
@@ -415,7 +425,9 @@ async function triggerNotificationsForEvents(eventsWithEmail) {
     const isClick = eventType === 'click';
     const title = isClick ? 'Link Clicked' : 'Email Opened';
     const friendlyName = getFriendlyRecipientName(email.recipient, knownNames);
-    const isMultiple = (email.recipient || '').includes(',');
+    const recipientList = (email.recipient || '').split(',').map(s => s.trim()).filter(Boolean);
+    const uniqueEmails = new Set(recipientList.map(r => r.replace(/.*<([^>]+)>.*/, '$1').replace(/[<>]/g, '').trim().toLowerCase()));
+    const isMultiple = uniqueEmails.size > 1;
     
     let message;
     if (isMultiple) {
