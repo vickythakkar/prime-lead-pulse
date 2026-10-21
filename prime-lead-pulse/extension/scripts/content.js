@@ -198,10 +198,25 @@ function formatEventTime(iso) {
   });
 }
 
-function getActiveSenderEmail() {
-  const accountBtn = document.querySelector('a[aria-label*="@"]');
+function getActiveSenderEmail(composeWindow) {
+  if (composeWindow) {
+    const fromInput = composeWindow.querySelector('input[name="from"]');
+    if (fromInput && fromInput.value) {
+      const match = fromInput.value.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+      if (match) return match[1];
+    }
+    const fromOption = composeWindow.querySelector('.J-JN-M-I[role="option"], span[email]');
+    if (fromOption) {
+      const em = fromOption.getAttribute('email') || fromOption.textContent;
+      const match = (em || '').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+      if (match) return match[1];
+    }
+  }
+
+  const accountBtn = document.querySelector('a[aria-label*="@"], button[aria-label*="@"], [aria-label*="Google Account"]');
   if (accountBtn) {
-    const match = accountBtn.getAttribute('aria-label').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+    const label = accountBtn.getAttribute('aria-label') || '';
+    const match = label.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
     if (match) return match[1];
   }
   const titleMatch = document.title.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
@@ -819,10 +834,7 @@ document.addEventListener('click', async (e) => {
   e.stopPropagation();
 
   const btn = isSend.closest('[role="button"]') || isSend;
-  btn.style.opacity = '0.5';
-  btn.style.pointerEvents = 'none';
-
-  const senderEmail = getActiveSenderEmail() || 'unknown';
+  const senderEmail = getActiveSenderEmail(compose) || 'unknown';
   const chipElements = Array.from(compose.querySelectorAll('[data-hovercard-id]'));
   let recipientList = [...new Set(chipElements.map(el => el.getAttribute('data-hovercard-id')).filter(Boolean))];
   let recipient = recipientList.join(', ');
@@ -837,100 +849,91 @@ document.addEventListener('click', async (e) => {
   }
   const subject = compose.querySelector('input[name="subjectbox"]')?.value ?? 'No Subject';
 
-  // Generate a UUID locally so we don't have to wait for the Vercel server response
+  // Generate a UUID locally
   const emailId = crypto.randomUUID();
-  
-  // Safety net: If chrome.storage fails (extension reloaded, context invalidated),
-  // send the email without tracking instead of freezing forever.
-  let storageCallbackFired = false;
-  const safetyTimeout = setTimeout(() => {
-    if (storageCallbackFired) return;
-    storageCallbackFired = true;
-    console.warn('Prime Lead Pulse: Storage callback timed out. Sending email without tracking. Please refresh Gmail.');
-    checkbox.checked = false;
-    btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-    delete compose.dataset.plpSending;
-    btn.click();
-  }, 3000);
+  const base = "https://prime-lead-pulse-sigma.vercel.app";
 
   try {
-    chrome.storage.local.get(['apiUrl'], ({ apiUrl }) => {
-      if (storageCallbackFired) return; // Safety timeout already fired
-      storageCallbackFired = true;
-      clearTimeout(safetyTimeout);
+    const body = compose.querySelector('div[aria-label="Message Body"], div[contenteditable="true"], .Am.Al.editable');
+    if (body) {
+      // Prevent data distortion in replies by removing old tracking pixels
+      const oldPixels = body.querySelectorAll('img[src*="/api/track/pixel/"]');
+      oldPixels.forEach(img => img.remove());
 
-      if (false) {
-        console.warn('Prime Lead Pulse: Cannot track email because API URL is not set. Please log in.');
-        checkbox.checked = false;
-        btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-        delete compose.dataset.plpSending;
-        btn.click();
-        return;
-      }
-      const base = "https://prime-lead-pulse-sigma.vercel.app";
-        const body = compose.querySelector('div[aria-label="Message Body"], div[contenteditable="true"], .Am.Al.editable');
-        if (body) {
-          // Prevent data distortion in replies by removing old tracking pixels
-          const oldPixels = body.querySelectorAll('img[src*="/api/track/pixel/"]');
-          oldPixels.forEach(img => img.remove());
-
-          // Prevent double-wrapping of links in quoted text by restoring their original URLs first
-          body.querySelectorAll('a').forEach(a => {
-            if (a.href.includes('/api/track/link/')) {
-              try {
-                const urlParam = new URL(a.href).searchParams.get('url');
-                if (urlParam) a.href = decodeURIComponent(urlParam);
-              } catch (e) {}
-            }
-          });
-
-          const pixel = document.createElement('img');
-          pixel.src = `${base}/api/track/pixel/${emailId}`;
-          pixel.setAttribute('width', '1');
-          pixel.setAttribute('height', '1');
-          pixel.setAttribute('alt', '');
-          pixel.style.cssText = 'width:1px!important;height:1px!important;min-width:1px!important;min-height:1px!important;opacity:0!important;border:none!important;margin:0!important;padding:0!important;position:absolute;left:-9999px;';
-          body.appendChild(pixel);
-
-          // Link rewriting disabled: original URLs remain 100% untouched
-
-      }
-      
-      // 2. Dispatch the real click to Gmail instantly (UI is completely unblocked)
-      checkbox.checked = false;
-      btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-      delete compose.dataset.plpSending;
-      btn.click();
-      
-      // OPTIMISTIC CACHE UPDATE:
-      // Instantly add to local cache so if the user jumps to the Sent folder,
-      // it says "Unopened" instead of flashing "Untracked" while waiting for the server/poll.
-      const newEmail = { id: emailId, sender_email: senderEmail, recipient: recipient, subject: subject, created_at: new Date().toISOString(), status: 'Unopened', opens: 0, clicks: 0, events: [] }; emailCache.push(newEmail); chrome.storage.local.get(['cached_emails_' + senderEmail.toLowerCase()], (data) => { const cache = data['cached_emails_' + senderEmail.toLowerCase()] || []; cache.push(newEmail); chrome.storage.local.set({ ['cached_emails_' + senderEmail.toLowerCase()]: cache }); });
-      
-      // Force UI refresh of sent badges
-      setTimeout(injectSentBadges, 100);
-
-      // 3. Fire the tracking call to the backend asynchronously over the wall
-      chrome.runtime.sendMessage({
-        action: 'CREATE_EMAIL',
-        payload: { id: emailId, sender_email: senderEmail, recipient, subject }
-      }, response => {
-        if (!response || !response.success) {
-          console.error("Prime Lead Pulse background tracking failed:", response?.error || response?.data?.error);
+      // Prevent double-wrapping of links in quoted text by restoring their original URLs first
+      body.querySelectorAll('a').forEach(a => {
+        if (a.href.includes('/api/track/link/')) {
+          try {
+            const urlParam = new URL(a.href).searchParams.get('url');
+            if (urlParam) a.href = decodeURIComponent(urlParam);
+          } catch (e) {}
         }
       });
-    });
-  } catch (e) {
-    // Extension context invalidated — just send the email
-    clearTimeout(safetyTimeout);
-    if (!storageCallbackFired) {
-      storageCallbackFired = true;
-      console.warn('Prime Lead Pulse: Extension context error. Sending without tracking.', e);
-      checkbox.checked = false;
-      btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
-      delete compose.dataset.plpSending;
-      btn.click();
+
+      const pixel = document.createElement('img');
+      pixel.src = `${base}/api/track/pixel/${emailId}`;
+      pixel.setAttribute('width', '1');
+      pixel.setAttribute('height', '1');
+      pixel.setAttribute('alt', '');
+      pixel.style.cssText = 'width:1px!important;height:1px!important;min-width:1px!important;min-height:1px!important;opacity:0!important;border:none!important;margin:0!important;padding:0!important;position:absolute;left:-9999px;';
+      body.appendChild(pixel);
     }
+  } catch (err) {
+    console.error('Prime Lead Pulse: Error injecting pixel', err);
+  }
+
+  // OPTIMISTIC CACHE UPDATE:
+  // Instantly add to local memory cache so Sent folder displays "Unopened" with zero delay
+  const newEmail = {
+    id: emailId,
+    sender_email: senderEmail,
+    recipient: recipient,
+    subject: subject,
+    created_at: new Date().toISOString(),
+    status: 'Unopened',
+    opens: 0,
+    clicks: 0,
+    events: [],
+    tracking_events: []
+  };
+  emailCache.unshift(newEmail);
+
+  // Uncheck tracking so the synthetic click doesn't re-trigger our interceptor
+  checkbox.checked = false;
+  btn.style.opacity = '1';
+  btn.style.pointerEvents = 'auto';
+  delete compose.dataset.plpSending;
+
+  // Let Gmail send natively with the tracking pixel embedded!
+  btn.click();
+
+  // Save to persistent storage cache in background
+  try {
+    const targetKey = 'cached_emails_' + (senderEmail ? senderEmail.toLowerCase() : 'unknown');
+    chrome.storage.local.get([targetKey], (data) => {
+      const cache = data[targetKey] || [];
+      if (!cache.some(e => e.id === emailId)) {
+        cache.unshift(newEmail);
+        chrome.storage.local.set({ [targetKey]: cache });
+      }
+    });
+  } catch (e) {}
+
+  // Force instant UI refresh of sent badges
+  setTimeout(injectSentBadges, 100);
+
+  // Send CREATE_EMAIL to background service worker
+  try {
+    chrome.runtime.sendMessage({
+      action: 'CREATE_EMAIL',
+      payload: { id: emailId, sender_email: senderEmail, recipient, subject }
+    }, response => {
+      if (!response || !response.success) {
+        console.error("Prime Lead Pulse background tracking failed:", response?.error || response?.data?.error);
+      }
+    });
+  } catch (err) {
+    console.warn("Prime Lead Pulse: Could not message background worker:", err);
   }
 }, true);
 

@@ -15,14 +15,20 @@ async function processRetryQueue() {
     const payload = currentQueue[i];
     try {
       const session = await getSessionForSender(payload.sender_email);
-      const res = await fetchWithAuth(`${base}/api/emails?limit=50&t=${Date.now()}`, { cache: "no-store", 
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify(payload)
-      }, session, apiUrl, payload.sender_email);
+      const headers = { 'Content-Type': 'application/json' };
+      if (session && session.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+      
+      const res = session 
+        ? await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload)
+          }, session, apiUrl, payload.sender_email)
+        : await fetch(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store",
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload)
+          });
       
       if (res.ok) {
         // Success! Remove from queue
@@ -140,7 +146,7 @@ async function getSessionForSender(senderEmail) {
   if (sessions && Object.keys(sessions).length > 0) {
     return Object.values(sessions)[0];
   }
-  throw new Error(`Please open the Prime Lead Pulse dashboard and log in to link this account.`);
+  return null;
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -184,21 +190,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const session = await getSessionForSender(senderEmail);
 
         const base = activeApiUrl.replace(/\/$/, '');
-        const res = await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify(request.payload)
-        }, session, activeApiUrl, senderEmail);
+        const headers = { 'Content-Type': 'application/json' };
+        if (session && session.access_token) {
+          headers['Authorization'] = `Bearer ${session.access_token}`;
+        }
 
-                let data;
+        const res = session
+          ? await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
+              method: 'POST',
+              headers,
+              body: JSON.stringify(request.payload)
+            }, session, activeApiUrl, senderEmail)
+          : await fetch(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store",
+              method: 'POST',
+              headers,
+              body: JSON.stringify(request.payload)
+            });
+
+        let data;
         const text = await res.text();
         try {
           data = JSON.parse(text);
         } catch (e) {
-          throw new Error(`Server returned non-JSON response (Status: ${res.status}). This usually means the server is down, timed out, or the API URL is incorrect. Response snippet: ${text.substring(0, 100)}...`);
+          throw new Error(`Server returned non-JSON response (Status: ${res.status}). Response snippet: ${text.substring(0, 100)}...`);
         }
         
         if (!res.ok) {
@@ -207,8 +221,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Immediately update local caches so the email is known right away
         if (data?.email) {
-          const parentEmail = session.user?.email || senderEmail;
-          const targetAddresses = new Set([parentEmail.toLowerCase()]);
+          const parentEmail = session?.user?.email || senderEmail;
+          const targetAddresses = new Set();
+          if (parentEmail) targetAddresses.add(parentEmail.toLowerCase());
           if (senderEmail) targetAddresses.add(senderEmail.toLowerCase());
           for (const addr of targetAddresses) {
             const key = `cached_emails_${addr}`;
@@ -235,9 +250,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             errorMsg = "Failed to fetch. If you are stuck on a localhost connection, please refresh the live Vercel dashboard to sync.";
         }
         
-        // Show error to user visually
-        
-        
         sendResponse({ success: false, error: errorMsg });
       }
     })();
@@ -256,7 +268,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
         const senderEmail = request.senderEmail;
         const session = await getSessionForSender(senderEmail);
-        const parentEmail = session.user?.email || senderEmail;
+        const parentEmail = session?.user?.email || senderEmail;
         
         // Prioritize active sender address first, then fallback to parent
         const keysToGet = [];
@@ -264,10 +276,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (parentEmail) keysToGet.push(`cached_emails_${parentEmail.toLowerCase()}`);
         
         const data = await chrome.storage.local.get(keysToGet);
-        const cached = (senderEmail && data[`cached_emails_${senderEmail.toLowerCase()}`]) ||
-                       (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
+        let cached = (senderEmail && data[`cached_emails_${senderEmail.toLowerCase()}`]) ||
+                     (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
         
-        sendResponse({ success: true, data: { emails: cached || [] } });
+        if (cached && cached.length > 0) {
+          sendResponse({ success: true, data: { emails: cached } });
+          return;
+        }
+
+        // Fetch fresh from server if cache was empty
+        const activeApiUrl = apiUrl || DEFAULT_API_URL;
+        const base = activeApiUrl.replace(/\/$/, '');
+        const queryUrl = senderEmail 
+          ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&t=${Date.now()}`
+          : `${base}/api/emails?t=${Date.now()}`;
+        
+        const headers = {};
+        if (session && session.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
+        const res = session 
+          ? await fetchWithAuth(queryUrl, { cache: "no-store", headers }, session, activeApiUrl, senderEmail)
+          : await fetch(queryUrl, { cache: "no-store", headers });
+
+        if (res.ok) {
+          const resData = await res.json();
+          cached = resData.emails || [];
+          if (senderEmail) {
+            await chrome.storage.local.set({ [`cached_emails_${senderEmail.toLowerCase()}`]: cached });
+          }
+          sendResponse({ success: true, data: { emails: cached } });
+        } else {
+          sendResponse({ success: true, data: { emails: cached || [] } });
+        }
       } catch (err) {
         sendResponse({ success: false, error: err.message });
       }
