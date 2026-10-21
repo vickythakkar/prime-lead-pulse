@@ -11,10 +11,10 @@ const DEFAULT_WELCOME_VARIANTS = [
 ];
 
 const DEFAULT_REALTOR_VARIANTS = [
-  "Hi {firstName}, thanks for connecting! Always great to link up with fellow real estate professionals. How is the market treating you recently in your area?",
-  "{timeOfDay} {firstName}, glad to connect with you! Great to see your work in real estate at {company}. How have buyer and seller trends been for you lately?",
-  "Hey {firstName}, appreciate the connection! Always looking to network with active agents and brokers. How is inventory and activity looking on your side this {dayOfWeek}?",
-  "Hello {firstName}, thanks for accepting my request! Always glad to have top real estate pros in my circle. Hope you're having a productive week—how's business treating you?"
+  "Hi {firstName}, thanks for connecting! It is always good to connect and know people in the industry.\n\nYou can check about how my company can help you grow on the below link:\nhttps://www.linkedin.com/company/prime-real-ops/",
+  "{timeOfDay} {firstName}, glad to link up! Always great to connect and expand my network with fellow professionals in the industry.\n\nFeel free to see how our team helps businesses scale and grow right here:\nhttps://www.linkedin.com/company/prime-real-ops/",
+  "Hello {firstName}, appreciate the connection! Always valuable to meet and stay in touch with active people in this space.\n\nHere is a quick look at how my company can support your growth:\nhttps://www.linkedin.com/company/prime-real-ops/",
+  "Hey {firstName}, great connecting with you! It's always a pleasure knowing fellow leaders across the industry.\n\nCheck out how we can help you grow your business at the link below:\nhttps://www.linkedin.com/company/prime-real-ops/"
 ];
 
 const DEFAULT_SETTINGS = {
@@ -45,22 +45,65 @@ function getTodayString() {
 }
 
 function generateContextPreservingVariants(baseText) {
-  const text = (baseText || '').trim();
-  const isRealtor = /realtor|real estate|broker|realty|mortgage/i.test(text);
-
-  if (isRealtor) {
-    return DEFAULT_REALTOR_VARIANTS.slice();
+  let text = (baseText || '').trim();
+  if (!text) {
+    return DEFAULT_WELCOME_VARIANTS.slice();
   }
 
-  const usesCompany = /\{company\}/i.test(text);
-  const companyPhrase = usesCompany ? " at {company}" : "";
+  // If user passed existing variants separated by ---OR---, take the first variant as the base
+  if (text.includes('---OR---')) {
+    text = text.split(/(?:\r?\n\s*---OR---\s*\r?\n)/i)[0].trim();
+  }
 
-  return [
-    `Hi {firstName}, thanks for connecting! Looking forward to staying in touch and seeing what you're working on. Hope you have a wonderful {dayOfWeek}!`,
-    `{timeOfDay} {firstName}, glad to link up with you here on LinkedIn! Excited to follow your journey${companyPhrase}. Wishing you a productive week ahead.`,
-    `Hello {firstName}, appreciate the connection! Always looking to expand my network with fellow professionals. Hope business is going great on your end this {dayOfWeek}!`,
-    `Hey {firstName}, great connecting with you! Looking forward to keeping in touch and following your updates. Have a fantastic rest of your {dayOfWeek}!`
+  // 1. Replace hardcoded recipient name in greeting (e.g. "Hi Ryan," -> "Hi {firstName},")
+  text = text.replace(/^(hi|hello|hey|dear)\s+[a-z0-9_-]+([,!]|\s+thanks|\s+thank)/i, '$1 {firstName}$2');
+
+  // Ensure {firstName} is present if greeting starts without tag
+  if (/^(hi|hello|hey)\s*[,!]/i.test(text)) {
+    text = text.replace(/^(hi|hello|hey)\s*[,!]/i, '$1 {firstName},');
+  }
+
+  // 2. Extract URLs
+  const urlMatches = text.match(/https?:\/\/[^\s]+/gi) || [];
+  const primaryUrl = urlMatches[0] || '';
+
+  // Check if this is the Prime Real Ops / Company growth message
+  const isPrimeOps = /prime-real-ops/i.test(text) || (/company/i.test(text) && /grow/i.test(text) && primaryUrl);
+
+  if (isPrimeOps || primaryUrl) {
+    const url = primaryUrl || 'https://www.linkedin.com/company/prime-real-ops/';
+    return [
+      text, // Variant 1: The user's exact original text!
+      `{timeOfDay} {firstName}, glad to link up! Always great to connect and expand my network with fellow professionals in the industry.\n\nFeel free to see how our team helps businesses scale and grow right here:\n${url}`,
+      `Hello {firstName}, appreciate the connection! Always valuable to meet and stay in touch with active people in this space.\n\nHere is a quick look at how my company can support your growth:\n${url}`,
+      `Hey {firstName}, great connecting with you! It's always a pleasure knowing fellow leaders across the industry.\n\nCheck out how we can help you grow your business at the link below:\n${url}`
+    ];
+  }
+
+  // 3. For any other custom message:
+  // Variant 1 is ALWAYS the user's original text!
+  const lines = text.split(/\r?\n+/).filter(l => l.trim().length > 0);
+  const firstLine = lines[0] || text;
+  const remainingBody = lines.length > 1 ? lines.slice(1).join('\n\n') : '';
+
+  const greetings = [
+    `{timeOfDay} {firstName}, glad to link up with you here on LinkedIn!`,
+    `Hello {firstName}, appreciate the connection! Always great connecting with fellow professionals.`,
+    `Hey {firstName}, great connecting with you!`
   ];
+
+  const variants = [text]; // Always keep user's original text as Variant 1!
+
+  greetings.forEach((greet) => {
+    if (remainingBody) {
+      variants.push(`${greet}\n\n${remainingBody}`);
+    } else {
+      const cleanedFirst = firstLine.replace(/^(hi|hello|hey|dear)\s+(\{firstName\}|[a-z0-9_-]+)[,!.]?\s*/i, '').trim();
+      variants.push(`${greet} ${cleanedFirst}`);
+    }
+  });
+
+  return variants;
 }
 
 function parseVariants(rawTemplate, fallbackList) {
@@ -298,10 +341,10 @@ function initDashboard() {
         const textarea = card?.querySelector('.dash-rule-template-input');
         const kwInput = card?.querySelector('.dash-rule-keywords-input');
         if (textarea) {
-          const isRealtor = /realtor|real estate|broker/i.test((kwInput?.value || '') + ' ' + (textarea.value || ''));
-          const variants = isRealtor ? DEFAULT_REALTOR_VARIANTS : generateContextPreservingVariants(textarea.value);
+          const userMsg = textarea.value.trim();
+          const variants = generateContextPreservingVariants(userMsg);
           textarea.value = variants.join('\n\n---OR---\n\n');
-          showToast('✨ Added safe whole-message variants!');
+          showToast('✨ Preserved your message & added 3 safe variations!');
         }
       });
     });
@@ -840,7 +883,14 @@ function initDashboard() {
       // Render Rules if not currently editing them
       const isEditingRules = dashRulesContainer && dashRulesContainer.contains(document.activeElement);
       if (!isEditingRules) {
-        currentDashRules = Array.isArray(settings.rules) ? settings.rules : DEFAULT_SETTINGS.rules;
+        let loadedRules = Array.isArray(settings.rules) ? settings.rules : DEFAULT_SETTINGS.rules;
+        loadedRules = loadedRules.map(r => {
+          if (r.id === 'rule_realtors' && (!r.template || r.template.includes('How is the market treating you recently in your area?'))) {
+            return { ...r, template: DEFAULT_REALTOR_VARIANTS.join("\n\n---OR---\n\n") };
+          }
+          return r;
+        });
+        currentDashRules = loadedRules;
         renderDashRules(currentDashRules);
       }
 

@@ -11,10 +11,10 @@ const DEFAULT_WELCOME_TEMPLATE = [
 ].join("\n\n---OR---\n\n");
 
 const DEFAULT_REALTOR_TEMPLATE = [
-  "Hi {firstName}, thanks for connecting! Always great to link up with fellow real estate professionals. How is the market treating you recently in your area?",
-  "{timeOfDay} {firstName}, glad to connect with you! Great to see your work in real estate at {company}. How have buyer and seller trends been for you lately?",
-  "Hey {firstName}, appreciate the connection! Always looking to network with active agents and brokers. How is inventory and activity looking on your side this {dayOfWeek}?",
-  "Hello {firstName}, thanks for accepting my request! Always glad to have top real estate pros in my circle. Hope you're having a productive week—how's business treating you?"
+  "Hi {firstName}, thanks for connecting! It is always good to connect and know people in the industry.\n\nYou can check about how my company can help you grow on the below link:\nhttps://www.linkedin.com/company/prime-real-ops/",
+  "{timeOfDay} {firstName}, glad to link up! Always great to connect and expand my network with fellow professionals in the industry.\n\nFeel free to see how our team helps businesses scale and grow right here:\nhttps://www.linkedin.com/company/prime-real-ops/",
+  "Hello {firstName}, appreciate the connection! Always valuable to meet and stay in touch with active people in this space.\n\nHere is a quick look at how my company can support your growth:\nhttps://www.linkedin.com/company/prime-real-ops/",
+  "Hey {firstName}, great connecting with you! It's always a pleasure knowing fellow leaders across the industry.\n\nCheck out how we can help you grow your business at the link below:\nhttps://www.linkedin.com/company/prime-real-ops/"
 ].join("\n\n---OR---\n\n");
 
 const DEFAULT_SETTINGS = {
@@ -67,10 +67,17 @@ async function getStorageData() {
   }
 
   const rawSettings = result.settings || {};
+  const rawRules = Array.isArray(rawSettings.rules) ? rawSettings.rules : DEFAULT_SETTINGS.rules;
+  const migratedRules = rawRules.map(r => {
+    if (r.id === 'rule_realtors' && (!r.template || r.template.includes('How is the market treating you recently'))) {
+      return { ...r, template: DEFAULT_REALTOR_TEMPLATE };
+    }
+    return r;
+  });
   const settings = {
     ...DEFAULT_SETTINGS,
     ...rawSettings,
-    rules: Array.isArray(rawSettings.rules) ? rawSettings.rules : DEFAULT_SETTINGS.rules
+    rules: migratedRules
   };
   const sentHistory = result.sentHistory || [];
   const runtimeState = result.runtimeState || {
