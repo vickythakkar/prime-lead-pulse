@@ -237,7 +237,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const minDays = typeof message.minAgeDays === 'number' 
           ? message.minAgeDays 
           : (message.minAgeMonths ? message.minAgeMonths * 30 : 30);
-        let targetTab = allTabs.find(t => t.url && t.url.includes('/mynetwork/invitation-manager/sent'));
+        let targetTab = allTabs.find(t => t.url && t.url.includes('/mynetwork/invitation-manager'));
         const targetUrl = `https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1&min_days=${minDays}`;
 
         if (targetTab) {
