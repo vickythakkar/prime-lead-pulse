@@ -357,8 +357,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // ============================================================
 // Notification Trigger Helper (Deduplicated & Subject-Grouped)
 // ============================================================
-function triggerNotificationsForEvents(eventsWithEmail) {
+function getFriendlyRecipientName(rawRecipient, contactNames) {
+  if (!rawRecipient) return 'Someone';
+
+  // 1. If format is "Tyler Durden <Tyler.Primerealops@gmail.com>", extract "Tyler Durden"
+  const nameMatch = rawRecipient.match(/^([^<]+)<[^>]+>/);
+  if (nameMatch && nameMatch[1].trim()) {
+    const parsedName = nameMatch[1].trim();
+    if (!parsedName.includes('@')) return parsedName;
+  }
+
+  // 2. Check contactNames dictionary
+  const cleanEmail = rawRecipient.replace(/.*<([^>]+)>.*/, '$1').replace(/[<>]/g, '').trim().toLowerCase();
+  if (contactNames && contactNames[cleanEmail]) {
+    return contactNames[cleanEmail];
+  }
+
+  // 3. Fallback: Parse name from email username if dotted (e.g. "tyler.durden@..." or "tyler.primerealops@...")
+  const username = cleanEmail.split('@')[0];
+  if (username && username.includes('.')) {
+    const parts = username.split('.').filter(p => p.length > 1 && !['primerealops', 'prime', 'diyflatfee', 'diyrealty'].includes(p.toLowerCase()));
+    if (parts.length > 0) {
+      return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
+    }
+  }
+
+  return rawRecipient;
+}
+
+async function triggerNotificationsForEvents(eventsWithEmail) {
   if (!eventsWithEmail || eventsWithEmail.length === 0) return;
+
+  const { contactNames } = await chrome.storage.local.get(['contactNames']);
+  const knownNames = contactNames || {};
+  if (!knownNames['tyler.primerealops@gmail.com']) knownNames['tyler.primerealops@gmail.com'] = 'Tyler Durden';
+  if (!knownNames['victor.primerealops@gmail.com']) knownNames['victor.primerealops@gmail.com'] = 'Victor Thakkar';
+  if (!knownNames['taarak.primerealops@gmail.com']) knownNames['taarak.primerealops@gmail.com'] = 'Taarak';
+  if (!knownNames['dlewis@diyflatfee.com']) knownNames['dlewis@diyflatfee.com'] = 'Darrell Lewis';
 
   const grouped = {};
   for (const { ev, email } of eventsWithEmail) {
@@ -379,8 +414,8 @@ function triggerNotificationsForEvents(eventsWithEmail) {
     const { email, eventType, count, url } = grouped[key];
     const isClick = eventType === 'click';
     const title = isClick ? 'Link Clicked' : 'Email Opened';
-    const recipient = email.recipient || 'Unknown Recipient';
-    const isMultiple = recipient.includes(',');
+    const friendlyName = getFriendlyRecipientName(email.recipient, knownNames);
+    const isMultiple = (email.recipient || '').includes(',');
     
     let message;
     if (isMultiple) {
@@ -389,8 +424,8 @@ function triggerNotificationsForEvents(eventsWithEmail) {
         : `Someone opened your email with subject "${email.subject}"`;
     } else {
       message = isClick 
-        ? `${recipient} clicked a link in your email - "${email.subject}"` 
-        : `${recipient} opened your email - "${email.subject}"`;
+        ? `${friendlyName} clicked a link in your email - "${email.subject}"` 
+        : `${friendlyName} opened your email - "${email.subject}"`;
     }
     if (count > 1) {
       message += ` (${count} times)`;

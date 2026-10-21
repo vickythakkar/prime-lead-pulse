@@ -837,17 +837,48 @@ document.addEventListener('click', async (e) => {
 
   const btn = isSend.closest('[role="button"]') || isSend;
   const senderEmail = getActiveSenderEmail(compose) || 'unknown';
-  const chipElements = Array.from(compose.querySelectorAll('[data-hovercard-id]'));
-  let recipientList = [...new Set(chipElements.map(el => el.getAttribute('data-hovercard-id')).filter(Boolean))];
-  let recipient = recipientList.join(', ');
-  
-  if (!recipient) {
-    const legacyChips = Array.from(compose.querySelectorAll('div[email]'));
-    let legacyList = [...new Set(legacyChips.map(c => c.getAttribute('email')).filter(Boolean))];
-    recipient = legacyList.join(', ');
-  }
+  const chipElements = Array.from(compose.querySelectorAll('[data-hovercard-id], div[email], span[email], .vR, .vN'));
+  const recipients = [];
+  const contactUpdates = {};
+
+  chipElements.forEach(chip => {
+    const em = chip.getAttribute('data-hovercard-id') || 
+               chip.getAttribute('email') || 
+               chip.querySelector('[data-hovercard-id]')?.getAttribute('data-hovercard-id') ||
+               chip.querySelector('[email]')?.getAttribute('email') || '';
+    if (!em || !em.includes('@')) return;
+
+    let nm = chip.getAttribute('name') || 
+             chip.querySelector('[name]')?.getAttribute('name') || '';
+    
+    if (!nm) {
+      const clone = chip.cloneNode(true);
+      clone.querySelectorAll('[role="button"], [aria-label*="Delete"], [aria-label*="Remove"], .vM').forEach(el => el.remove());
+      const txt = clone.textContent.trim();
+      if (txt && !txt.includes('@') && txt.length >= 2) {
+        nm = txt;
+      }
+    }
+
+    if (nm && em) {
+      contactUpdates[em.toLowerCase()] = nm;
+      recipients.push(`${nm} <${em}>`);
+    } else {
+      recipients.push(em);
+    }
+  });
+
+  let recipient = [...new Set(recipients)].join(', ');
   if (!recipient) {
     recipient = compose.querySelector('input[name="to"]')?.value || 'Unknown Recipient';
+  }
+
+  if (Object.keys(contactUpdates).length > 0) {
+    chrome.storage.local.get(['contactNames'], (data) => {
+      const names = data.contactNames || {};
+      Object.assign(names, contactUpdates);
+      chrome.storage.local.set({ contactNames: names });
+    });
   }
   const subject = compose.querySelector('input[name="subjectbox"]')?.value ?? 'No Subject';
 
