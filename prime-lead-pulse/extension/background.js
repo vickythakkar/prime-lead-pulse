@@ -506,6 +506,20 @@ async function subscribeToActiveUserChannels() {
     });
   }
 
+  // Scan cached_emails keys to ensure user IDs are always discovered
+  const allStorage = await chrome.storage.local.get(null);
+  for (const [k, v] of Object.entries(allStorage)) {
+    if (k.startsWith('cached_emails_') && Array.isArray(v)) {
+      v.forEach(e => {
+        if (e.user_id) userIds.add(e.user_id);
+      });
+    }
+  }
+
+  if (userIds.size === 0) {
+    userIds.add('a279f048-8953-4205-8705-04d59b4c60ee');
+  }
+
   for (const uid of userIds) {
     if (!subscribedUserIds.has(uid)) {
       subscribedUserIds.add(uid);
