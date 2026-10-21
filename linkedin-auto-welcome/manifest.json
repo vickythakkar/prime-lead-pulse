@@ -6,9 +6,11 @@
   "permissions": [
     "storage",
     "alarms",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "host_permissions": [
+    "https://*.linkedin.com/*",
     "https://www.linkedin.com/*"
   ],
   "action": {

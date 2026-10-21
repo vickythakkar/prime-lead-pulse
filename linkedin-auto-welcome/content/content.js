@@ -163,6 +163,19 @@ function updateHud(statusText, progressText = '', countdownSeconds = 0) {
   if (timerEl) {
     timerEl.textContent = countdownSeconds > 0 ? `Next in: ${countdownSeconds}s` : '';
   }
+
+  // Real-time synchronization to storage for popup and dashboard
+  try {
+    chrome.storage.local.set({
+      runtimeState: {
+        isProcessing: isRunning,
+        currentStatus: statusText,
+        progressText: progressText || '',
+        countdown: countdownSeconds || 0,
+        lastRunTime: new Date().toISOString()
+      }
+    });
+  } catch (e) {}
 }
 
 function hideHud() {
@@ -177,10 +190,17 @@ function stopAutomation(reason = 'Stopped') {
   updateHud(reason);
   setTimeout(() => hideHud(), 4000);
 
-  chrome.runtime.sendMessage({
-    action: 'UPDATE_RUNTIME_STATE',
-    state: { isProcessing: false, currentStatus: reason, lastRunTime: new Date().toISOString() }
-  });
+  try {
+    chrome.storage.local.set({
+      runtimeState: {
+        isProcessing: false,
+        currentStatus: reason,
+        progressText: '',
+        countdown: 0,
+        lastRunTime: new Date().toISOString()
+      }
+    });
+  } catch (e) {}
 }
 
 // Helper: check if element is a "Message" button
@@ -810,6 +830,18 @@ async function runAutoWelcomeSequence() {
   shouldStop = false;
 
   try {
+    chrome.storage.local.set({
+      runtimeState: {
+        isProcessing: true,
+        currentStatus: 'Starting Auto-Welcome...',
+        progressText: '',
+        countdown: 0,
+        lastRunTime: new Date().toISOString()
+      }
+    });
+  } catch (e) {}
+
+  try {
     const { settings, stats, sentHistory } = await getExtensionData();
 
     if (!settings.enabled) {
@@ -1125,17 +1157,36 @@ async function runAutoWelcomeSequence() {
       finishMsg = 'All visible connections were already messaged previously. Click "Clear History" in extension if you want to re-message them.';
     }
 
+    isRunning = false;
     updateHud(finishMsg, formatQuota(currentTodayCount, settings.dailyLimit));
-    await chrome.runtime.sendMessage({
-      action: 'UPDATE_RUNTIME_STATE',
-      state: { isProcessing: false, currentStatus: finishMsg, lastRunTime: new Date().toISOString() }
-    });
+    try {
+      await chrome.storage.local.set({
+        runtimeState: {
+          isProcessing: false,
+          currentStatus: finishMsg,
+          progressText: '',
+          countdown: 0,
+          lastRunTime: new Date().toISOString()
+        }
+      });
+    } catch (e) {}
 
     setTimeout(hideHud, 6000);
 
   } catch (err) {
     console.error('Auto Welcome sequence error:', err);
     updateHud(`Error: ${err.message}`);
+    try {
+      await chrome.storage.local.set({
+        runtimeState: {
+          isProcessing: false,
+          currentStatus: `Error: ${err.message}`,
+          progressText: '',
+          countdown: 0,
+          lastRunTime: new Date().toISOString()
+        }
+      });
+    } catch (e) {}
     setTimeout(hideHud, 5000);
   } finally {
     isRunning = false;
@@ -1149,14 +1200,26 @@ async function runWithdrawOldInvitesSequence(minAgeMonths = 6) {
   isRunning = true;
   shouldStop = false;
 
+  try {
+    chrome.storage.local.set({
+      runtimeState: {
+        isProcessing: true,
+        currentStatus: 'Starting invitation cleanup (> 6 months)...',
+        progressText: '',
+        countdown: 0,
+        lastRunTime: new Date().toISOString()
+      }
+    });
+  } catch (e) {}
+
   updateHud('Starting invitation cleanup (> 6 months)...');
-  await sleep(1500);
+  await sleep(1200);
 
   // If not on sent invitations page, navigate there
   if (!window.location.href.includes('/mynetwork/invitation-manager/sent')) {
     updateHud('Navigating to Sent Invitations page...');
     sessionStorage.setItem('law_pending_withdraw', '1');
-    window.location.href = 'https://www.linkedin.com/mynetwork/invitation-manager/sent/';
+    window.location.href = 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
     isRunning = false;
     return;
   }
@@ -1164,73 +1227,105 @@ async function runWithdrawOldInvitesSequence(minAgeMonths = 6) {
   let withdrawnCount = 0;
   let emptyRounds = 0;
 
-  while (!shouldStop && emptyRounds < 4) {
-    const rows = Array.from(document.querySelectorAll('.invitation-card, li.invitation-card, [data-view-name*="invitation"], .artdeco-list__item'));
-    let foundInBatch = false;
+  try {
+    while (!shouldStop && emptyRounds < 4) {
+      const rows = Array.from(document.querySelectorAll('.invitation-card, li.invitation-card, [data-view-name*="invitation"], .artdeco-list__item'));
+      let foundInBatch = false;
 
-    for (const row of rows) {
-      if (shouldStop) break;
+      for (const row of rows) {
+        if (shouldStop) break;
 
-      const rowText = (row.innerText || row.textContent || '').toLowerCase();
-      let isOld = false;
-      const monthMatch = rowText.match(/sent\s+(\d+)\s+month/i) || rowText.match(/(\d+)\s+month(?:s)?\s+ago/i);
-      const yearMatch = rowText.match(/sent\s+(\d+)\s+year/i) || rowText.match(/year/i);
+        const rowText = (row.innerText || row.textContent || '').toLowerCase();
+        let isOld = false;
+        const monthMatch = rowText.match(/sent\s+(\d+)\s+month/i) || rowText.match(/(\d+)\s+month(?:s)?\s+ago/i);
+        const yearMatch = rowText.match(/sent\s+(\d+)\s+year/i) || rowText.match(/year/i);
 
-      if (yearMatch) {
-        isOld = true;
-      } else if (monthMatch && parseInt(monthMatch[1], 10) >= minAgeMonths) {
-        isOld = true;
-      }
+        if (yearMatch) {
+          isOld = true;
+        } else if (monthMatch && parseInt(monthMatch[1], 10) >= minAgeMonths) {
+          isOld = true;
+        }
 
-      if (isOld) {
-        foundInBatch = true;
-        const buttons = Array.from(row.querySelectorAll('button, a.artdeco-button'));
-        const withdrawBtn = buttons.find(b => {
-          const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').toLowerCase();
-          return t.includes('withdraw');
-        });
-
-        if (withdrawBtn) {
-          const personName = (row.querySelector('.invitation-card__title, h3, strong, a[href*="/in/"]')?.innerText || 'Member').trim();
-          updateHud(`Withdrawing invite to ${personName} (> 6 months old)...`);
-          withdrawBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          await sleep(600);
-          withdrawBtn.click();
-          await sleep(1000);
-
-          // Confirm in dialog if modal appears
-          const modalBtn = Array.from(document.querySelectorAll('.artdeco-modal button, [role="dialog"] button')).find(b => {
-            const t = (b.innerText || b.textContent || '').trim().toLowerCase();
-            return t === 'withdraw';
+        if (isOld) {
+          foundInBatch = true;
+          const buttons = Array.from(row.querySelectorAll('button, a.artdeco-button'));
+          const withdrawBtn = buttons.find(b => {
+            const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').toLowerCase();
+            return t.includes('withdraw');
           });
-          if (modalBtn) {
-            modalBtn.click();
-            await sleep(1000);
-          }
 
-          withdrawnCount++;
-          updateHud(`Withdrawn ${withdrawnCount} old invite(s)...`);
-          await sleep(1200);
+          if (withdrawBtn) {
+            const personName = (row.querySelector('.invitation-card__title, h3, strong, a[href*="/in/"]')?.innerText || 'Member').trim();
+            updateHud(`Withdrawing invite to ${personName} (> 6 months old)...`);
+            withdrawBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await sleep(600);
+            withdrawBtn.click();
+            await sleep(1000);
+
+            // Confirm in dialog if modal appears
+            const modalBtn = Array.from(document.querySelectorAll('.artdeco-modal button, [role="dialog"] button')).find(b => {
+              const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+              return t === 'withdraw';
+            });
+            if (modalBtn) {
+              modalBtn.click();
+              await sleep(1000);
+            }
+
+            withdrawnCount++;
+            updateHud(`Withdrawn ${withdrawnCount} old invite(s)...`);
+            await sleep(1200);
+          }
         }
       }
+
+      if (!foundInBatch) {
+        emptyRounds++;
+        updateHud(`Checking for older invitations (scroll check ${emptyRounds}/4)...`);
+        window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
+        await sleep(2500);
+      } else {
+        emptyRounds = 0;
+        window.scrollBy({ top: 500, behavior: 'smooth' });
+        await sleep(1500);
+      }
     }
 
-    if (!foundInBatch) {
-      emptyRounds++;
-      updateHud(`Checking for older invitations (scroll check ${emptyRounds}/4)...`);
-      window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
-      await sleep(2500);
-    } else {
-      emptyRounds = 0;
-      window.scrollBy({ top: 500, behavior: 'smooth' });
-      await sleep(1500);
-    }
+    const msg = shouldStop ? 'Withdrawal stopped by user.' : `Done! Withdrawn ${withdrawnCount} invitations older than 6 months.`;
+    isRunning = false;
+    updateHud(msg);
+    try {
+      await chrome.storage.local.set({
+        runtimeState: {
+          isProcessing: false,
+          currentStatus: msg,
+          progressText: '',
+          countdown: 0,
+          lastRunTime: new Date().toISOString()
+        }
+      });
+    } catch (e) {}
+    setTimeout(hideHud, 6000);
+
+  } catch (err) {
+    console.error('Withdraw invites error:', err);
+    updateHud(`Error: ${err.message}`);
+    isRunning = false;
+    try {
+      await chrome.storage.local.set({
+        runtimeState: {
+          isProcessing: false,
+          currentStatus: `Error: ${err.message}`,
+          progressText: '',
+          countdown: 0,
+          lastRunTime: new Date().toISOString()
+        }
+      });
+    } catch (e) {}
+    setTimeout(hideHud, 5000);
+  } finally {
+    isRunning = false;
   }
-
-  const msg = shouldStop ? 'Withdrawal stopped by user.' : `Done! Withdrawn ${withdrawnCount} invitations older than 6 months.`;
-  updateHud(msg);
-  setTimeout(hideHud, 6000);
-  isRunning = false;
 }
 
 // Runtime message listener
@@ -1269,8 +1364,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Automatic scanner trigger on page load when navigating or flagged
 function checkAutoStartOnPageLoad() {
-  if (window.location.href.includes('/mynetwork/invite-connect/connections')) {
-    const urlParams = new URLSearchParams(window.location.search);
+  const currentUrl = window.location.href;
+  const urlParams = new URLSearchParams(window.location.search);
+
+  if (currentUrl.includes('/mynetwork/invite-connect/connections')) {
     const hasParam = urlParams.get('law_auto') === '1';
     const hasSession = sessionStorage.getItem('law_pending_scan') === '1';
 
@@ -1281,29 +1378,43 @@ function checkAutoStartOnPageLoad() {
         window.history.replaceState({}, document.title, cleanUrl);
       } catch (e) {}
 
-      console.log('[LAW] Auto-start detected on connections page load. Starting in 3s...');
+      console.log('[LAW] Auto-start detected on connections page load. Starting in 1.8s...');
       setTimeout(() => {
         if (!isRunning) {
           runAutoWelcomeSequence();
         }
-      }, 3000);
+      }, 1800);
     }
-  } else if (window.location.href.includes('/mynetwork/invitation-manager/sent')) {
-    if (sessionStorage.getItem('law_pending_withdraw') === '1') {
+  } else if (currentUrl.includes('/mynetwork/invitation-manager/sent')) {
+    const hasParam = urlParams.get('law_withdraw') === '1';
+    const hasSession = sessionStorage.getItem('law_pending_withdraw') === '1';
+
+    if (hasParam || hasSession) {
       sessionStorage.removeItem('law_pending_withdraw');
-      console.log('[LAW] Pending invitation withdrawal detected. Starting in 3s...');
+      try {
+        const cleanUrl = window.location.href.replace(/[?&]law_withdraw=1/, '');
+        window.history.replaceState({}, document.title, cleanUrl);
+      } catch (e) {}
+
+      console.log('[LAW] Auto-withdraw detected on sent invitations page load. Starting in 1.8s...');
       setTimeout(() => {
         if (!isRunning) {
           runWithdrawOldInvitesSequence(6);
         }
-      }, 3000);
+      }, 1800);
     }
   }
 }
 
+// Watch for single-page application (SPA) client-side navigation
+window.addEventListener('popstate', () => {
+  setTimeout(checkAutoStartOnPageLoad, 600);
+});
+
 // Initialize on page load
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', checkAutoStartOnPageLoad);
+  window.addEventListener('load', checkAutoStartOnPageLoad);
 } else {
   checkAutoStartOnPageLoad();
 }

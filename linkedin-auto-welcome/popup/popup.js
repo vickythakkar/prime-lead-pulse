@@ -574,15 +574,129 @@ function initPopup() {
     });
   }
 
+  // Resilient LinkedIn Tab Launcher
+  async function launchLinkedInTask(taskType) {
+    const isScan = taskType === 'scan';
+    const targetPath = isScan ? '/mynetwork/invite-connect/connections' : '/mynetwork/invitation-manager/sent';
+    const targetUrl = isScan 
+      ? 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1'
+      : 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
+    const actionName = isScan ? 'START_DOM_SCAN' : 'START_WITHDRAW_INVITES';
+    const actionPayload = isScan ? { action: actionName } : { action: actionName, minAgeMonths: 6 };
+
+    const allTabs = await chrome.tabs.query({});
+    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const currentActiveTab = activeTabs && activeTabs.length > 0 ? activeTabs[0] : null;
+
+    let targetTab = null;
+
+    // 1. If currently viewing a LinkedIn tab, prioritize it
+    if (currentActiveTab && currentActiveTab.url && currentActiveTab.url.includes('linkedin.com')) {
+      targetTab = currentActiveTab;
+    } else {
+      // 2. Look for tab matching target path
+      targetTab = allTabs.find(t => t.url && t.url.includes(targetPath));
+      if (!targetTab) {
+        // 3. Look for any LinkedIn tab
+        targetTab = allTabs.find(t => t.url && t.url.includes('linkedin.com'));
+      }
+    }
+
+    // If no LinkedIn tab exists, open one with auto-start query parameter
+    if (!targetTab) {
+      await chrome.tabs.create({ url: targetUrl, active: true });
+      return;
+    }
+
+    // Bring tab into focus
+    await chrome.tabs.update(targetTab.id, { active: true });
+
+    // If tab is on another LinkedIn page, navigate directly with auto-start query parameter
+    if (!targetTab.url || !targetTab.url.includes(targetPath)) {
+      await chrome.tabs.update(targetTab.id, { url: targetUrl });
+      return;
+    }
+
+    // Tab is on target page. Test if content script is active
+    let isConnected = false;
+    try {
+      const ping = await chrome.tabs.sendMessage(targetTab.id, { action: 'CHECK_IS_RUNNING' });
+      if (ping) isConnected = true;
+    } catch (e) {
+      isConnected = false;
+    }
+
+    // If content script was invalidated by extension reload, dynamically re-inject
+    if (!isConnected && chrome.scripting) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          files: ['content/content.js']
+        });
+        await chrome.scripting.insertCSS({
+          target: { tabId: targetTab.id },
+          files: ['content/content.css']
+        });
+        await new Promise(r => setTimeout(r, 700));
+        isConnected = true;
+      } catch (injectErr) {
+        console.warn('[LAW] Script injection failed, falling back to URL navigation:', injectErr);
+      }
+    }
+
+    // If connected, dispatch action
+    if (isConnected) {
+      try {
+        const res = await chrome.tabs.sendMessage(targetTab.id, actionPayload);
+        if (res && (res.started || res.success || res.alreadyRunning)) {
+          return;
+        }
+      } catch (e) {
+        console.warn('[LAW] Direct message failed, navigating tab:', e);
+      }
+    }
+
+    // Final fallback: reload/navigate with auto-trigger URL
+    await chrome.tabs.update(targetTab.id, { url: targetUrl });
+  }
+
+  // Stop All Automation
+  async function stopAllAutomation() {
+    showToast('Stopping automation...');
+    try {
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) {
+        if (tab.url && tab.url.includes('linkedin.com')) {
+          try {
+            await chrome.tabs.sendMessage(tab.id, { action: 'STOP_DOM_SCAN' });
+          } catch (e) {}
+        }
+      }
+      await chrome.storage.local.set({
+        runtimeState: {
+          isProcessing: false,
+          currentStatus: 'Stopped by user',
+          progressText: '',
+          countdown: 0,
+          lastRunTime: new Date().toISOString()
+        }
+      });
+      await syncStateFromStorage();
+    } catch (err) {
+      console.error('[LAW] Error stopping automation:', err);
+    }
+  }
+
   // Withdraw old invites button
   if (btnWithdrawInvites) {
     btnWithdrawInvites.addEventListener('click', async (e) => {
       e.preventDefault();
       showToast('Opening Sent Invitations to withdraw invites >6m...');
       try {
-        await chrome.runtime.sendMessage({ action: 'START_WITHDRAW_INVITES', minAgeMonths: 6 });
+        await launchLinkedInTask('withdraw');
       } catch (err) {
-        chrome.tabs.create({ url: 'https://www.linkedin.com/mynetwork/invitation-manager/sent/' });
+        console.error('Failed to trigger withdraw:', err);
+        showToast('Error opening Sent Invitations');
       }
     });
   }
@@ -635,39 +749,16 @@ function initPopup() {
       e.preventDefault();
       btnTriggerScan.classList.add('hidden');
       if (btnStop) btnStop.classList.remove('hidden');
-      if (statusText) statusText.textContent = 'Opening connections...';
+      if (statusText) statusText.textContent = 'Connecting to LinkedIn...';
       if (statusDot) statusDot.className = 'status-dot busy';
 
       showToast('Opening LinkedIn Connections...');
 
       try {
-        // Query or create LinkedIn tab
-        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/mynetwork/invite-connect/connections/*' });
-        let targetTabId;
-
-        if (tabs && tabs.length > 0) {
-          targetTabId = tabs[0].id;
-          await chrome.tabs.update(targetTabId, { active: true });
-        } else {
-          const newTab = await chrome.tabs.create({
-            url: 'https://www.linkedin.com/mynetwork/invite-connect/connections/',
-            active: true
-          });
-          targetTabId = newTab.id;
-        }
-
-        // Send start scan message to tab
-        setTimeout(async () => {
-          try {
-            await chrome.tabs.sendMessage(targetTabId, { action: 'START_DOM_SCAN' });
-          } catch (err) {
-            console.log('Tab still initializing content script');
-          }
-        }, 2500);
-
+        await launchLinkedInTask('scan');
       } catch (err) {
         console.error('Failed to trigger scan:', err);
-        showToast('Failed to open LinkedIn tab');
+        showToast('Failed to connect to LinkedIn tab');
         if (btnTriggerScan) btnTriggerScan.classList.remove('hidden');
         if (btnStop) btnStop.classList.add('hidden');
       }
@@ -678,25 +769,7 @@ function initPopup() {
   if (btnStop) {
     btnStop.addEventListener('click', async (e) => {
       e.preventDefault();
-      showToast('Stopping automation...');
-      try {
-        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/*' });
-        for (const tab of tabs) {
-          try {
-            await chrome.tabs.sendMessage(tab.id, { action: 'STOP_DOM_SCAN' });
-          } catch (e) {}
-        }
-        await chrome.storage.local.set({
-          runtimeState: {
-            isProcessing: false,
-            currentStatus: 'Stopped by user',
-            lastRunTime: new Date().toISOString()
-          }
-        });
-        await syncStateFromStorage();
-      } catch (err) {
-        console.error('Error stopping:', err);
-      }
+      await stopAllAutomation();
     });
   }
 
@@ -766,7 +839,14 @@ function initPopup() {
           if (btnStop) btnStop.classList.remove('hidden');
         } else {
           statusDot.className = 'status-dot';
-          statusText.textContent = (!isUnlimited && todayCount >= limit) ? 'Daily limit reached' : 'Ready';
+          const lastStatus = runtimeState.currentStatus;
+          if (!isUnlimited && todayCount >= limit) {
+            statusText.textContent = 'Daily limit reached';
+          } else if (lastStatus && !lastStatus.toLowerCase().includes('stopped') && !lastStatus.toLowerCase().includes('processing') && !lastStatus.toLowerCase().includes('connecting')) {
+            statusText.textContent = lastStatus;
+          } else {
+            statusText.textContent = 'Ready';
+          }
           if (btnTriggerScan) btnTriggerScan.classList.remove('hidden');
           if (btnStop) btnStop.classList.add('hidden');
         }

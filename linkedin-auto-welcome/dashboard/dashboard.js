@@ -650,6 +650,109 @@ function initDashboard() {
     });
   });
 
+  // Resilient LinkedIn Tab Launcher
+  async function launchLinkedInTask(taskType) {
+    const isScan = taskType === 'scan';
+    const targetPath = isScan ? '/mynetwork/invite-connect/connections' : '/mynetwork/invitation-manager/sent';
+    const targetUrl = isScan 
+      ? 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1'
+      : 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
+    const actionName = isScan ? 'START_DOM_SCAN' : 'START_WITHDRAW_INVITES';
+    const actionPayload = isScan ? { action: actionName } : { action: actionName, minAgeMonths: 6 };
+
+    const allTabs = await chrome.tabs.query({});
+    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const currentActiveTab = activeTabs && activeTabs.length > 0 ? activeTabs[0] : null;
+
+    let targetTab = null;
+
+    if (currentActiveTab && currentActiveTab.url && currentActiveTab.url.includes('linkedin.com')) {
+      targetTab = currentActiveTab;
+    } else {
+      targetTab = allTabs.find(t => t.url && t.url.includes(targetPath));
+      if (!targetTab) {
+        targetTab = allTabs.find(t => t.url && t.url.includes('linkedin.com'));
+      }
+    }
+
+    if (!targetTab) {
+      await chrome.tabs.create({ url: targetUrl, active: true });
+      return;
+    }
+
+    await chrome.tabs.update(targetTab.id, { active: true });
+
+    if (!targetTab.url || !targetTab.url.includes(targetPath)) {
+      await chrome.tabs.update(targetTab.id, { url: targetUrl });
+      return;
+    }
+
+    let isConnected = false;
+    try {
+      const ping = await chrome.tabs.sendMessage(targetTab.id, { action: 'CHECK_IS_RUNNING' });
+      if (ping) isConnected = true;
+    } catch (e) {
+      isConnected = false;
+    }
+
+    if (!isConnected && chrome.scripting) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          files: ['content/content.js']
+        });
+        await chrome.scripting.insertCSS({
+          target: { tabId: targetTab.id },
+          files: ['content/content.css']
+        });
+        await new Promise(r => setTimeout(r, 700));
+        isConnected = true;
+      } catch (injectErr) {
+        console.warn('[LAW] Script injection failed, falling back to URL navigation:', injectErr);
+      }
+    }
+
+    if (isConnected) {
+      try {
+        const res = await chrome.tabs.sendMessage(targetTab.id, actionPayload);
+        if (res && (res.started || res.success || res.alreadyRunning)) {
+          return;
+        }
+      } catch (e) {
+        console.warn('[LAW] Direct message failed, navigating tab:', e);
+      }
+    }
+
+    await chrome.tabs.update(targetTab.id, { url: targetUrl });
+  }
+
+  // Stop All Automation
+  async function stopAllAutomation() {
+    showToast('Stopping automation...');
+    try {
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) {
+        if (tab.url && tab.url.includes('linkedin.com')) {
+          try {
+            await chrome.tabs.sendMessage(tab.id, { action: 'STOP_DOM_SCAN' });
+          } catch (e) {}
+        }
+      }
+      await chrome.storage.local.set({
+        runtimeState: {
+          isProcessing: false,
+          currentStatus: 'Stopped by user',
+          progressText: '',
+          countdown: 0,
+          lastRunTime: new Date().toISOString()
+        }
+      });
+      await syncDashboard();
+    } catch (err) {
+      console.error('[LAW] Error stopping automation:', err);
+    }
+  }
+
   // Withdraw Invites button
   if (btnDashWithdrawInvites) {
     btnDashWithdrawInvites.addEventListener('click', async (e) => {
@@ -659,9 +762,10 @@ function initDashboard() {
       }
       showToast('Opening Sent Invitations & withdrawing >6m invites...');
       try {
-        await chrome.runtime.sendMessage({ action: 'START_WITHDRAW_INVITES' });
+        await launchLinkedInTask('withdraw');
       } catch (err) {
         console.error('Failed to start invite cleanup:', err);
+        showToast('Error opening Sent Invitations');
       }
     });
   }
@@ -716,28 +820,10 @@ function initDashboard() {
       e.preventDefault();
       showToast('Opening LinkedIn Connections...');
       try {
-        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/mynetwork/invite-connect/connections/*' });
-        let targetTabId;
-
-        if (tabs && tabs.length > 0) {
-          targetTabId = tabs[0].id;
-          await chrome.tabs.update(targetTabId, { active: true });
-        } else {
-          const newTab = await chrome.tabs.create({
-            url: 'https://www.linkedin.com/mynetwork/invite-connect/connections/',
-            active: true
-          });
-          targetTabId = newTab.id;
-        }
-
-        setTimeout(async () => {
-          try {
-            await chrome.tabs.sendMessage(targetTabId, { action: 'START_DOM_SCAN' });
-          } catch (err) {}
-        }, 2500);
-
+        await launchLinkedInTask('scan');
       } catch (err) {
         console.error('Failed to trigger scan:', err);
+        showToast('Failed to connect to LinkedIn tab');
       }
     });
   }
@@ -746,25 +832,7 @@ function initDashboard() {
   if (btnDashStop) {
     btnDashStop.addEventListener('click', async (e) => {
       e.preventDefault();
-      showToast('Stopping automation...');
-      try {
-        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/*' });
-        for (const tab of tabs) {
-          try {
-            await chrome.tabs.sendMessage(tab.id, { action: 'STOP_DOM_SCAN' });
-          } catch (e) {}
-        }
-        await chrome.storage.local.set({
-          runtimeState: {
-            isProcessing: false,
-            currentStatus: 'Stopped by user',
-            lastRunTime: new Date().toISOString()
-          }
-        });
-        await syncDashboard();
-      } catch (err) {
-        console.error('Error stopping:', err);
-      }
+      await stopAllAutomation();
     });
   }
 
@@ -854,13 +922,22 @@ function initDashboard() {
           statStatus.textContent = 'Paused';
           statStatus.style.color = '#64748b';
         } else if (runtimeState.isProcessing) {
-          statStatus.textContent = 'In Progress';
+          statStatus.textContent = runtimeState.currentStatus || 'In Progress';
           statStatus.style.color = '#f59e0b';
           if (btnDashScan) btnDashScan.classList.add('hidden');
           if (btnDashStop) btnDashStop.classList.remove('hidden');
         } else {
-          statStatus.textContent = 'Ready';
-          statStatus.style.color = '#10b981';
+          const lastStatus = runtimeState.currentStatus;
+          if (!isUnlimited && todayCount >= limit) {
+            statStatus.textContent = 'Daily limit reached';
+            statStatus.style.color = '#f59e0b';
+          } else if (lastStatus && !lastStatus.toLowerCase().includes('stopped') && !lastStatus.toLowerCase().includes('processing') && !lastStatus.toLowerCase().includes('connecting')) {
+            statStatus.textContent = lastStatus;
+            statStatus.style.color = '#10b981';
+          } else {
+            statStatus.textContent = 'Ready';
+            statStatus.style.color = '#10b981';
+          }
           if (btnDashScan) btnDashScan.classList.remove('hidden');
           if (btnDashStop) btnDashStop.classList.add('hidden');
         }

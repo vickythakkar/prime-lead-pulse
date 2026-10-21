@@ -232,56 +232,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       if (message.action === 'START_WITHDRAW_INVITES') {
-        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/mynetwork/invitation-manager/sent/*' });
-        let targetTabId;
+        const allTabs = await chrome.tabs.query({});
+        let targetTab = allTabs.find(t => t.url && t.url.includes('/mynetwork/invitation-manager/sent'));
+        const targetUrl = 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
 
-        if (tabs.length > 0) {
-          targetTabId = tabs[0].id;
-          await chrome.tabs.update(targetTabId, { active: true });
-        } else {
-          const newTab = await chrome.tabs.create({
-            url: 'https://www.linkedin.com/mynetwork/invitation-manager/sent/',
-            active: true
-          });
-          targetTabId = newTab.id;
+        if (targetTab) {
+          await chrome.tabs.update(targetTab.id, { active: true });
+          try {
+            await chrome.tabs.sendMessage(targetTab.id, { action: 'START_WITHDRAW_INVITES', minAgeMonths: 6 });
+          } catch (e) {
+            await chrome.tabs.update(targetTab.id, { url: targetUrl });
+          }
+          sendResponse({ success: true, tabId: targetTab.id });
+          return;
         }
 
-        setTimeout(async () => {
-          try {
-            await chrome.tabs.sendMessage(targetTabId, { action: 'START_WITHDRAW_INVITES', minAgeMonths: 6 });
-          } catch (err) {}
-        }, 3000);
+        const anyLinkedInTab = allTabs.find(t => t.url && t.url.includes('linkedin.com'));
+        if (anyLinkedInTab) {
+          await chrome.tabs.update(anyLinkedInTab.id, { url: targetUrl, active: true });
+          sendResponse({ success: true, tabId: anyLinkedInTab.id });
+          return;
+        }
 
-        sendResponse({ success: true, tabId: targetTabId });
+        const newTab = await chrome.tabs.create({ url: targetUrl, active: true });
+        sendResponse({ success: true, tabId: newTab.id });
         return;
       }
 
       if (message.action === 'START_SCAN_SESSION') {
-        // Find existing LinkedIn connections tab or open one
-        const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/mynetwork/invite-connect/connections/*' });
-        let targetTabId;
+        const allTabs = await chrome.tabs.query({});
+        let targetTab = allTabs.find(t => t.url && t.url.includes('/mynetwork/invite-connect/connections'));
+        const targetUrl = 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1';
 
-        if (tabs.length > 0) {
-          targetTabId = tabs[0].id;
-          await chrome.tabs.update(targetTabId, { active: true });
-        } else {
-          const newTab = await chrome.tabs.create({
-            url: 'https://www.linkedin.com/mynetwork/invite-connect/connections/',
-            active: true
-          });
-          targetTabId = newTab.id;
+        if (targetTab) {
+          await chrome.tabs.update(targetTab.id, { active: true });
+          try {
+            await chrome.tabs.sendMessage(targetTab.id, { action: 'START_DOM_SCAN' });
+          } catch (e) {
+            await chrome.tabs.update(targetTab.id, { url: targetUrl });
+          }
+          sendResponse({ success: true, tabId: targetTab.id });
+          return;
         }
 
-        // Give the page a moment to load and request scan
-        setTimeout(async () => {
-          try {
-            await chrome.tabs.sendMessage(targetTabId, { action: 'START_DOM_SCAN' });
-          } catch (err) {
-            console.log('Tab still loading or listener initializing');
-          }
-        }, 3000);
+        const anyLinkedInTab = allTabs.find(t => t.url && t.url.includes('linkedin.com'));
+        if (anyLinkedInTab) {
+          await chrome.tabs.update(anyLinkedInTab.id, { url: targetUrl, active: true });
+          sendResponse({ success: true, tabId: anyLinkedInTab.id });
+          return;
+        }
 
-        sendResponse({ success: true, tabId: targetTabId });
+        const newTab = await chrome.tabs.create({ url: targetUrl, active: true });
+        sendResponse({ success: true, tabId: newTab.id });
         return;
       }
 
