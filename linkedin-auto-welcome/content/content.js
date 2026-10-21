@@ -1374,13 +1374,15 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
   }
 
   let withdrawnCount = 0;
-  let emptyScrolls = 0;
-  const maxScrolls = 12;
+  let stuckScrolls = 0;
+  let totalScrollCount = 0;
+  const maxTotalScrolls = 200; // Allows auto-scrolling through up to 2,000+ invites
   let seenOldestDays = 0;
   let totalCardsSeen = initialCards.length;
+  let lastCardsCount = 0;
 
   try {
-    while (!shouldStop && emptyScrolls < maxScrolls) {
+    while (!shouldStop && stuckScrolls < 4 && totalScrollCount < maxTotalScrolls) {
       const currentCards = getSentInvitationCards();
       totalCardsSeen = Math.max(totalCardsSeen, currentCards.length);
 
@@ -1430,16 +1432,23 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
       }
 
       if (!foundQualifying) {
-        emptyScrolls++;
+        totalScrollCount++;
+        if (currentCards.length === lastCardsCount) {
+          stuckScrolls++;
+        } else {
+          stuckScrolls = 0;
+        }
+        lastCardsCount = currentCards.length;
+
         const oldestDisplay = seenOldestDays > 0 ? formatAgeDays(seenOldestDays) : 'today';
         updateHud(
-          `Scanning older invites ${ageLabel}... (${totalCardsSeen} visible, oldest: ${oldestDisplay})`,
-          `Scroll: ${emptyScrolls}/${maxScrolls}`
+          `Auto-scrolling to invites ${ageLabel}... (${totalCardsSeen} scanned, oldest: ${oldestDisplay})`,
+          `Scan #${totalScrollCount}`
         );
         window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
-        await sleep(2200);
+        await sleep(1800);
       } else {
-        emptyScrolls = 0;
+        stuckScrolls = 0;
         window.scrollBy({ top: 500, behavior: 'smooth' });
         await sleep(1500);
       }
@@ -1452,7 +1461,7 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
       msg = `Done! Successfully withdrawn ${withdrawnCount} invitations (${ageLabel}).`;
     } else if (totalCardsSeen > 0) {
       const oldestText = seenOldestDays > 0 ? formatAgeDays(seenOldestDays) : 'less than 1 day ago';
-      msg = `Found ${totalCardsSeen} pending invitations (oldest: ${oldestText}), but none are ${ageLabel}. To withdraw them, select "All Pending Invites" in the extension.`;
+      msg = `Scanned ${totalCardsSeen} pending invitations (oldest: ${oldestText}), but none reached ${ageLabel}. To withdraw more recent invites, select "All Pending Invites" or "1 Month".`;
     } else {
       msg = 'No pending sent invitations found on this account.';
     }
