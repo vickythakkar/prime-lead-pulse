@@ -47,10 +47,10 @@ export async function GET(
   }
 
   try {
-    // 1. Fetch the email to ensure it exists
+    // 1. Fetch the email to ensure it exists and get owner details
     const { data: emailData, error: emailError } = await supabase
       .from('emails')
-      .select('created_at')
+      .select('id, user_id, recipient, subject, sender_email, created_at')
       .eq('id', emailId)
       .single();
 
@@ -78,13 +78,47 @@ export async function GET(
 
     if (!recentClicks || recentClicks.length === 0) {
       // Log the click event in Supabase
-      await supabase.from('tracking_events').insert({
+      const { data: newEvent } = await supabase.from('tracking_events').insert({
         email_id: emailId,
         event_type: 'click',
         url: targetUrl,
         ip_address: ipAddress,
         user_agent: userAgent,
-      });
+      }).select().single();
+
+      // Broadcast real-time alert to the sender
+      if (emailData?.user_id) {
+        try {
+          await Promise.race([
+            new Promise((resolve) => {
+              const rtChan = supabase.channel(`realtime:user_${emailData.user_id}`);
+              rtChan.subscribe(async (status) => {
+                if (status === 'SUBSCRIBED') {
+                  await rtChan.send({
+                    type: 'broadcast',
+                    event: 'tracking_event',
+                    payload: {
+                      id: newEvent?.id,
+                      email_id: emailId,
+                      event_type: 'click',
+                      url: targetUrl,
+                      recipient: emailData.recipient,
+                      subject: emailData.subject,
+                      sender_email: emailData.sender_email,
+                      created_at: newEvent?.created_at || new Date().toISOString()
+                    }
+                  });
+                  supabase.removeChannel(rtChan);
+                  resolve(true);
+                }
+              });
+            }),
+            new Promise((resolve) => setTimeout(resolve, 1500))
+          ]);
+        } catch (rtErr) {
+          console.error('[Track Link] Realtime broadcast error:', rtErr);
+        }
+      }
     }
   } catch (error) {
     console.error('Error logging link click:', error);

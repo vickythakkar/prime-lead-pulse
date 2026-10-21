@@ -62,10 +62,10 @@ export async function GET(
     //   return new NextResponse(PIXEL_BUFFER, { status: 200, headers: PIXEL_HEADERS });
     // }
 
-    // 2. Fetch the email to check its creation time
+    // 2. Fetch the email to check its creation time and owner
     let { data: emailData } = await supabase
       .from('emails')
-      .select('created_at')
+      .select('id, user_id, recipient, subject, sender_email, created_at')
       .eq('id', emailId)
       .single();
 
@@ -74,7 +74,7 @@ export async function GET(
       await new Promise(r => setTimeout(r, 1500));
       const { data: retryData } = await supabase
         .from('emails')
-        .select('created_at')
+        .select('id, user_id, recipient, subject, sender_email, created_at')
         .eq('id', emailId)
         .single();
       emailData = retryData;
@@ -92,12 +92,45 @@ export async function GET(
         .limit(1);
 
       if (!recentOpens || recentOpens.length === 0) {
-        await supabase.from('tracking_events').insert({
+        const { data: newEvent } = await supabase.from('tracking_events').insert({
           email_id: emailId,
           event_type: 'open',
           ip_address: ipAddress,
           user_agent: userAgent,
-        });
+        }).select().single();
+
+        // Broadcast real-time alert to the sender
+        if (emailData?.user_id) {
+          try {
+            await Promise.race([
+              new Promise((resolve) => {
+                const rtChan = supabase.channel(`realtime:user_${emailData.user_id}`);
+                rtChan.subscribe(async (status) => {
+                  if (status === 'SUBSCRIBED') {
+                    await rtChan.send({
+                      type: 'broadcast',
+                      event: 'tracking_event',
+                      payload: {
+                        id: newEvent?.id,
+                        email_id: emailId,
+                        event_type: 'open',
+                        recipient: emailData.recipient,
+                        subject: emailData.subject,
+                        sender_email: emailData.sender_email,
+                        created_at: newEvent?.created_at || new Date().toISOString()
+                      }
+                    });
+                    supabase.removeChannel(rtChan);
+                    resolve(true);
+                  }
+                });
+              }),
+              new Promise((resolve) => setTimeout(resolve, 1500))
+            ]);
+          } catch (rtErr) {
+            console.error('[Track Pixel] Realtime broadcast error:', rtErr);
+          }
+        }
       }
     } else {
       console.warn(`[Track Pixel] Email ID ${emailId} not found in database. Skipping tracking event.`);

@@ -980,6 +980,20 @@ function triggerPoll() {
 triggerPoll();
 setInterval(triggerPoll, 30000); // Trigger background poll every 30 seconds
 
+// Keep service worker connected while user has Gmail open
+let keepAlivePort = null;
+function maintainKeepAlive() {
+  try {
+    keepAlivePort = chrome.runtime.connect({ name: 'gmail-active' });
+    if (keepAlivePort) {
+      keepAlivePort.onDisconnect.addListener(() => {
+        setTimeout(maintainKeepAlive, 3000);
+      });
+    }
+  } catch (e) {}
+}
+maintainKeepAlive();
+
 // Actually load the UI from local storage
 fetchEmailStats().then(() => {
   injectSentBadges();

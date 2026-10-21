@@ -152,11 +152,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const sessions = data.sessions || {};
         sessions[plpEmail.toLowerCase()] = request.session;
         chrome.storage.local.set({ sessions, apiUrl, session: request.session, lastPoll: 0 }, () => {
+          connectRealtime();
           pollForNotifications();
         });
       });
     } else {
       chrome.storage.local.set({ session: request.session, apiUrl, lastPoll: 0 }, () => {
+        connectRealtime();
         pollForNotifications();
       });
     }
@@ -310,6 +312,228 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+// ============================================================
+// Notification Trigger Helper (Deduplicated & Subject-Grouped)
+// ============================================================
+function triggerNotificationsForEvents(eventsWithEmail) {
+  if (!eventsWithEmail || eventsWithEmail.length === 0) return;
+
+  const grouped = {};
+  for (const { ev, email } of eventsWithEmail) {
+    const eventTime = new Date(ev.created_at).getTime();
+    if (Date.now() - eventTime > 10 * 60 * 1000) continue; 
+
+    // Group by normalized subject instead of email.id so that multiple opens in the same thread
+    // (e.g., "Subject" and "Re: Subject") are bundled into a single notification.
+    const cleanSubject = (email.subject || '').replace(/^((Re|Fwd|Fw|Aw|Wg|Tr|Rv|Sv|Vs|Vl|Res|Enc):\s*)+/ig, '').trim().toLowerCase();
+    const key = `${cleanSubject}_${ev.event_type}`;
+    if (!grouped[key]) {
+      grouped[key] = { email, eventType: ev.event_type, count: 0, url: ev.url };
+    }
+    grouped[key].count++;
+  }
+
+  for (const key of Object.keys(grouped)) {
+    const { email, eventType, count, url } = grouped[key];
+    const isClick = eventType === 'click';
+    const title = isClick ? 'Link Clicked' : 'Email Opened';
+    const recipient = email.recipient || 'Unknown Recipient';
+    const isMultiple = recipient.includes(',');
+    
+    let message;
+    if (isMultiple) {
+      message = isClick 
+        ? `Someone clicked a link in your email with subject "${email.subject}"` 
+        : `Someone opened your email with subject "${email.subject}"`;
+    } else {
+      message = isClick 
+        ? `${recipient} clicked a link in your email - "${email.subject}"` 
+        : `${recipient} opened your email - "${email.subject}"`;
+    }
+    if (count > 1) {
+      message += ` (${count} times)`;
+    }
+      
+    // Use a 1-minute bucket for the notification ID to debounce duplicate popups
+    const timeBucket = Math.floor(Date.now() / 60000);
+    const notificationId = `${key}_${timeBucket}`;
+    
+    chrome.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: 'icon.gif',
+      title,
+      message,
+      priority: 0
+    });
+
+    // Automatically clear the notification after 5 seconds
+    setTimeout(() => {
+      chrome.notifications.clear(notificationId);
+    }, 5000);
+  }
+}
+
+// ============================================================
+// Supabase Realtime WebSocket Client (Instant < 1s Alerts)
+// ============================================================
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJudnVlZnRqdGh4eGlsaXVzdnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA2OTkwMDUsImV4cCI6MjEwNjI3NTAwNX0.QzQ-jALg_AdEFkwIWb4S7bW6TP31RnfeB2SxOe65wik';
+
+let realtimeWs = null;
+let realtimeHeartbeatInterval = null;
+let realtimeReconnectTimeout = null;
+let realtimeRefCounter = 0;
+let subscribedUserIds = new Set();
+
+function connectRealtime() {
+  if (realtimeWs && (realtimeWs.readyState === WebSocket.OPEN || realtimeWs.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
+  try {
+    const wsUrl = `wss://rnvueftjthxxiliusvxi.supabase.co/realtime/v1/websocket?apikey=${SUPABASE_ANON_KEY}&vsn=1.0.0`;
+    realtimeWs = new WebSocket(wsUrl);
+
+    realtimeWs.onopen = async () => {
+      console.log('[PLP Realtime] WebSocket connected');
+      if (realtimeReconnectTimeout) {
+        clearTimeout(realtimeReconnectTimeout);
+        realtimeReconnectTimeout = null;
+      }
+
+      // 25-second heartbeat to keep connection alive
+      clearInterval(realtimeHeartbeatInterval);
+      realtimeHeartbeatInterval = setInterval(() => {
+        if (realtimeWs && realtimeWs.readyState === WebSocket.OPEN) {
+          realtimeWs.send(JSON.stringify({
+            topic: 'phoenix',
+            event: 'heartbeat',
+            payload: {},
+            ref: String(++realtimeRefCounter)
+          }));
+        }
+      }, 25000);
+
+      // Subscribe to all active account user channels
+      await subscribeToActiveUserChannels();
+    };
+
+    realtimeWs.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.event === 'broadcast' && msg.payload?.event === 'tracking_event') {
+          await handleIncomingRealtimeEvent(msg.payload.payload);
+        }
+      } catch (err) {
+        console.error('[PLP Realtime] Error parsing message:', err);
+      }
+    };
+
+    realtimeWs.onclose = () => {
+      cleanupRealtime();
+      if (!realtimeReconnectTimeout) {
+        realtimeReconnectTimeout = setTimeout(connectRealtime, 5000);
+      }
+    };
+
+    realtimeWs.onerror = () => {
+      try { realtimeWs.close(); } catch (e) {}
+    };
+  } catch (err) {
+    if (!realtimeReconnectTimeout) {
+      realtimeReconnectTimeout = setTimeout(connectRealtime, 10000);
+    }
+  }
+}
+
+function cleanupRealtime() {
+  clearInterval(realtimeHeartbeatInterval);
+  realtimeHeartbeatInterval = null;
+  subscribedUserIds.clear();
+  realtimeWs = null;
+}
+
+async function subscribeToActiveUserChannels() {
+  if (!realtimeWs || realtimeWs.readyState !== WebSocket.OPEN) return;
+
+  const { session, sessions } = await chrome.storage.local.get(['session', 'sessions']);
+  const userIds = new Set();
+  if (session?.user?.id) userIds.add(session.user.id);
+  if (sessions) {
+    Object.values(sessions).forEach(s => {
+      if (s?.user?.id) userIds.add(s.user.id);
+    });
+  }
+
+  for (const uid of userIds) {
+    if (!subscribedUserIds.has(uid)) {
+      subscribedUserIds.add(uid);
+      const joinMsg = {
+        topic: `realtime:user_${uid}`,
+        event: 'phx_join',
+        payload: { config: { broadcast: { self: false } } },
+        ref: String(++realtimeRefCounter)
+      };
+      realtimeWs.send(JSON.stringify(joinMsg));
+      console.log(`[PLP Realtime] Subscribed to realtime:user_${uid}`);
+    }
+  }
+}
+
+async function handleIncomingRealtimeEvent(payload) {
+  if (!payload || !payload.id) return;
+
+  // 1. Deduplicate with knownEventIds
+  const { knownEventIds } = await chrome.storage.local.get(['knownEventIds']);
+  const currentKnownIds = new Set(knownEventIds || []);
+  if (currentKnownIds.has(payload.id)) return;
+  currentKnownIds.add(payload.id);
+  await chrome.storage.local.set({ knownEventIds: Array.from(currentKnownIds) });
+
+  // 2. Trigger instant notification
+  const syntheticEmail = {
+    id: payload.email_id,
+    subject: payload.subject,
+    recipient: payload.recipient,
+    sender_email: payload.sender_email
+  };
+  triggerNotificationsForEvents([{ ev: payload, email: syntheticEmail }]);
+
+  // 3. Immediately update cached emails for badges in Gmail
+  const sender = (payload.sender_email || '').toLowerCase();
+  if (sender) {
+    const key = `cached_emails_${sender}`;
+    const storageData = await chrome.storage.local.get([key]);
+    const list = storageData[key] || [];
+    const idx = list.findIndex(e => e.id === payload.email_id);
+    if (idx !== -1) {
+      const email = { ...list[idx] };
+      email.tracking_events = email.tracking_events || [];
+      if (!email.tracking_events.some(e => e.id === payload.id)) {
+        email.tracking_events.unshift({
+          id: payload.id,
+          event_type: payload.event_type,
+          url: payload.url,
+          created_at: payload.created_at
+        });
+        if (payload.event_type === 'open') email.opens = (email.opens || 0) + 1;
+        if (payload.event_type === 'click') email.clicks = (email.clicks || 0) + 1;
+        list[idx] = email;
+        await chrome.storage.local.set({ [key]: list });
+      }
+    }
+  }
+
+  // 4. Gently poll in the background to ensure entire mailbox stays 100% in sync
+  pollForNotifications();
+}
+
+// Keep service worker connected while user has Gmail open
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'gmail-active') {
+    connectRealtime();
+  }
+});
+
 // ------ Notification Polling & Idle Detection ------
 // 10-minute idle detection threshold (600 seconds)
 chrome.idle.setDetectionInterval(600);
@@ -413,61 +637,7 @@ async function pollForNotifications() {
     }
     await chrome.storage.local.set({ knownEventIds: knownArray });
 
-    const grouped = {};
-    for (const { ev, email } of newEventsToNotify) {
-      const eventTime = new Date(ev.created_at).getTime();
-      if (Date.now() - eventTime > 10 * 60 * 1000) continue; 
-
-      // Group by normalized subject instead of email.id so that multiple opens in the same thread
-      // (e.g., "Subject" and "Re: Subject") are bundled into a single notification.
-      const cleanSubject = (email.subject || '').replace(/^((Re|Fwd|Fw|Aw|Wg|Tr|Rv|Sv|Vs|Vl|Res|Enc):\s*)+/ig, '').trim().toLowerCase();
-      const key = `${cleanSubject}_${ev.event_type}`;
-      if (!grouped[key]) {
-        grouped[key] = { email, eventType: ev.event_type, count: 0, url: ev.url };
-      }
-      grouped[key].count++;
-    }
-
-    for (const key of Object.keys(grouped)) {
-      const { email, eventType, count, url } = grouped[key];
-      const isClick = eventType === 'click';
-      const title = isClick ? 'Link Clicked' : 'Email Opened';
-      const recipient = email.recipient || 'Unknown Recipient';
-      const isMultiple = recipient.includes(',');
-      
-      let message;
-      if (isMultiple) {
-        message = isClick 
-          ? `Someone clicked a link in your email with subject "${email.subject}"` 
-          : `Someone opened your email with subject "${email.subject}"`;
-      } else {
-        message = isClick 
-          ? `${recipient} clicked a link in your email - "${email.subject}"` 
-          : `${recipient} opened your email - "${email.subject}"`;
-      }
-      if (count > 1) {
-        message += ` (${count} times)`;
-      }
-        
-      // Use a 1-minute bucket for the notification ID.
-      // This ensures that if 3 pixels fire within 60 seconds of each other across different polling cycles,
-      // they simply update the ONE existing notification on the screen rather than stacking 3 popups.
-      const timeBucket = Math.floor(Date.now() / 60000);
-      const notificationId = `${key}_${timeBucket}`;
-      
-      chrome.notifications.create(notificationId, {
-        type: 'basic',
-        iconUrl: 'icon.gif',
-        title,
-        message,
-        priority: 0
-      });
-
-      // Automatically clear the notification after 5 seconds
-      setTimeout(() => {
-        chrome.notifications.clear(notificationId);
-      }, 5000);
-    }
+    triggerNotificationsForEvents(newEventsToNotify);
 
   } catch (err) {
     console.error('Polling error:', err);
@@ -475,3 +645,22 @@ async function pollForNotifications() {
     isPolling = false;
   }
 }
+
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local' && (changes.session || changes.sessions)) {
+    subscribeToActiveUserChannels();
+  }
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  connectRealtime();
+  pollForNotifications();
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  connectRealtime();
+  pollForNotifications();
+});
+
+// Initial startup connection
+connectRealtime();
