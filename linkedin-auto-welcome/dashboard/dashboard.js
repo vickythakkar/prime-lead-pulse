@@ -36,7 +36,8 @@ const DEFAULT_SETTINGS = {
   webhookUrl: "",
   followUpEnabled: false,
   followUpDays: 4,
-  followUpTemplate: "Hi {firstName}, following up on my previous note. Hope you're having a productive week!"
+  followUpTemplate: "Hi {firstName}, following up on my previous note. Hope you're having a productive week!",
+  withdrawAgeDays: 30
 };
 
 function getTodayString() {
@@ -137,6 +138,7 @@ function initDashboard() {
   const btnDashScan = document.getElementById('btn-dash-scan');
   const btnDashStop = document.getElementById('btn-dash-stop');
   const btnDashWithdrawInvites = document.getElementById('btn-dash-withdraw-invites');
+  const dashQuickWithdrawAge = document.getElementById('dash-quick-withdraw-age');
   const btnGotoLogs = document.getElementById('btn-goto-logs');
 
   // Template Form
@@ -651,14 +653,14 @@ function initDashboard() {
   });
 
   // Resilient LinkedIn Tab Launcher
-  async function launchLinkedInTask(taskType) {
+  async function launchLinkedInTask(taskType, minAgeDays = 30) {
     const isScan = taskType === 'scan';
     const targetPath = isScan ? '/mynetwork/invite-connect/connections' : '/mynetwork/invitation-manager/sent';
     const targetUrl = isScan 
       ? 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1'
-      : 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
+      : `https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1&min_days=${minAgeDays}`;
     const actionName = isScan ? 'START_DOM_SCAN' : 'START_WITHDRAW_INVITES';
-    const actionPayload = isScan ? { action: actionName } : { action: actionName, minAgeMonths: 6 };
+    const actionPayload = isScan ? { action: actionName } : { action: actionName, minAgeDays };
 
     const allTabs = await chrome.tabs.query({});
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -757,16 +759,30 @@ function initDashboard() {
   if (btnDashWithdrawInvites) {
     btnDashWithdrawInvites.addEventListener('click', async (e) => {
       e.preventDefault();
-      if (!confirm('This will open your Sent Invitations page and withdraw all pending invites sent more than 6 months ago. Proceed?')) {
+      const minDays = dashQuickWithdrawAge ? parseInt(dashQuickWithdrawAge.value, 10) : 30;
+      const ageLabel = minDays === 0 ? 'all pending invites' : (minDays >= 30 ? `>${Math.round(minDays / 30)}m` : `>${Math.round(minDays / 7)}w`);
+      if (!confirm(`This will open your Sent Invitations page and withdraw pending invites (${ageLabel}). Proceed?`)) {
         return;
       }
-      showToast('Opening Sent Invitations & withdrawing >6m invites...');
+      showToast(`Opening Sent Invitations & withdrawing invites (${ageLabel})...`);
       try {
-        await launchLinkedInTask('withdraw');
+        await launchLinkedInTask('withdraw', minDays);
       } catch (err) {
         console.error('Failed to start invite cleanup:', err);
         showToast('Error opening Sent Invitations');
       }
+    });
+  }
+
+  // Dash Quick withdraw age change
+  if (dashQuickWithdrawAge) {
+    dashQuickWithdrawAge.addEventListener('change', async () => {
+      const minDays = parseInt(dashQuickWithdrawAge.value, 10);
+      try {
+        const { settings = {} } = await chrome.storage.local.get('settings');
+        await chrome.storage.local.set({ settings: { ...settings, withdrawAgeDays: minDays } });
+        showToast(`Cleanup age set to ${dashQuickWithdrawAge.options[dashQuickWithdrawAge.selectedIndex].text}`);
+      } catch (e) {}
     });
   }
 
@@ -997,6 +1013,9 @@ function initDashboard() {
       }
       if (dashFollowupTemplateInput && document.activeElement !== dashFollowupTemplateInput) {
         dashFollowupTemplateInput.value = settings.followUpTemplate || DEFAULT_SETTINGS.followUpTemplate;
+      }
+      if (dashQuickWithdrawAge && document.activeElement !== dashQuickWithdrawAge) {
+        dashQuickWithdrawAge.value = String(settings.withdrawAgeDays !== undefined ? settings.withdrawAgeDays : 30);
       }
 
       renderTables(sentHistory);

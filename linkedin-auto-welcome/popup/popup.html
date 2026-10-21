@@ -52,21 +52,36 @@
     </div>
 
     <!-- Quick Actions -->
-    <div class="actions-card">
-      <button id="btn-trigger-scan" class="btn btn-primary">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="5 3 19 12 5 21 5 3"></polygon>
-        </svg>
-        <span>Scan & Send Messages</span>
-      </button>
-      <button id="btn-withdraw-invites" class="btn" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; flex: 0.9;" title="Withdraw pending invitations sent more than 6 months ago">
-        <span>🧹 Withdraw Invites (>6m)</span>
-      </button>
-      <button id="btn-stop" class="btn btn-danger hidden">
+    <div class="actions-card" style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="display: flex; gap: 8px; width: 100%;">
+        <button id="btn-trigger-scan" class="btn btn-primary" style="flex: 1.2;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          <span>Scan & Send Messages</span>
+        </button>
+        <button id="btn-withdraw-invites" class="btn" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; flex: 1;" title="Withdraw pending sent invitations">
+          <span id="btn-withdraw-label">🧹 Withdraw Invites</span>
+        </button>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #64748b; background: #f8fafc; padding: 5px 10px; border-radius: 6px; border: 1px solid #e2e8f0;">
+        <span>Clean requests older than:</span>
+        <select id="quick-withdraw-age" style="padding: 2px 6px; font-size: 11px; border-radius: 4px; border: 1px solid #cbd5e1; background: #fff; color: #334155; font-weight: 500; cursor: pointer;">
+          <option value="14">2 Weeks (14d)</option>
+          <option value="30" selected>1 Month (30d)</option>
+          <option value="60">2 Months (60d)</option>
+          <option value="90">3 Months (90d)</option>
+          <option value="180">6 Months (180d)</option>
+          <option value="0">All Pending Invites</option>
+        </select>
+      </div>
+
+      <button id="btn-stop" class="btn btn-danger hidden" style="width: 100%;">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="6" y="6" width="12" height="12"></rect>
         </svg>
-        <span>Stop</span>
+        <span>Stop Automation</span>
       </button>
     </div>
 

@@ -32,7 +32,8 @@ const DEFAULT_SETTINGS = {
   minDelay: 25,
   maxDelay: 45,
   skipExistingChats: true,
-  autoScanInterval: 60
+  autoScanInterval: 60,
+  withdrawAgeDays: 30
 };
 
 function getTodayString() {
@@ -125,6 +126,8 @@ function initPopup() {
   const quotaProgressFill = document.getElementById('quota-progress-fill');
   const btnTriggerScan = document.getElementById('btn-trigger-scan');
   const btnWithdrawInvites = document.getElementById('btn-withdraw-invites');
+  const btnWithdrawLabel = document.getElementById('btn-withdraw-label');
+  const quickWithdrawAge = document.getElementById('quick-withdraw-age');
   const btnStop = document.getElementById('btn-stop');
 
   // Tabs
@@ -575,14 +578,14 @@ function initPopup() {
   }
 
   // Resilient LinkedIn Tab Launcher
-  async function launchLinkedInTask(taskType) {
+  async function launchLinkedInTask(taskType, minAgeDays = 30) {
     const isScan = taskType === 'scan';
     const targetPath = isScan ? '/mynetwork/invite-connect/connections' : '/mynetwork/invitation-manager/sent';
     const targetUrl = isScan 
       ? 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1'
-      : 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
+      : `https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1&min_days=${minAgeDays}`;
     const actionName = isScan ? 'START_DOM_SCAN' : 'START_WITHDRAW_INVITES';
-    const actionPayload = isScan ? { action: actionName } : { action: actionName, minAgeMonths: 6 };
+    const actionPayload = isScan ? { action: actionName } : { action: actionName, minAgeDays };
 
     const allTabs = await chrome.tabs.query({});
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -691,13 +694,27 @@ function initPopup() {
   if (btnWithdrawInvites) {
     btnWithdrawInvites.addEventListener('click', async (e) => {
       e.preventDefault();
-      showToast('Opening Sent Invitations to withdraw invites >6m...');
+      const minDays = quickWithdrawAge ? parseInt(quickWithdrawAge.value, 10) : 30;
+      const ageLabel = minDays === 0 ? 'all pending invites' : (minDays >= 30 ? `>${Math.round(minDays / 30)}m` : `>${Math.round(minDays / 7)}w`);
+      showToast(`Opening Sent Invitations (${ageLabel})...`);
       try {
-        await launchLinkedInTask('withdraw');
+        await launchLinkedInTask('withdraw', minDays);
       } catch (err) {
         console.error('Failed to trigger withdraw:', err);
         showToast('Error opening Sent Invitations');
       }
+    });
+  }
+
+  // Quick withdraw age filter change
+  if (quickWithdrawAge) {
+    quickWithdrawAge.addEventListener('change', async () => {
+      const minDays = parseInt(quickWithdrawAge.value, 10);
+      try {
+        const { settings = {} } = await chrome.storage.local.get('settings');
+        await chrome.storage.local.set({ settings: { ...settings, withdrawAgeDays: minDays } });
+        showToast(`Cleanup age set to ${quickWithdrawAge.options[quickWithdrawAge.selectedIndex].text}`);
+      } catch (e) {}
     });
   }
 
@@ -908,6 +925,9 @@ function initPopup() {
       }
       if (settingFollowupDays && document.activeElement !== settingFollowupDays) {
         settingFollowupDays.value = settings.followUpDays || 4;
+      }
+      if (quickWithdrawAge && document.activeElement !== quickWithdrawAge) {
+        quickWithdrawAge.value = String(settings.withdrawAgeDays !== undefined ? settings.withdrawAgeDays : 30);
       }
 
       // Render Logs

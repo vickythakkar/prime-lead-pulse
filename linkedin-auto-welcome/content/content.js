@@ -36,7 +36,8 @@ const DEFAULT_SETTINGS = {
   minDelay: 25,
   maxDelay: 45,
   skipExistingChats: true,
-  autoScanInterval: 60
+  autoScanInterval: 60,
+  withdrawAgeDays: 30
 };
 
 function sleep(ms) {
@@ -1194,17 +1195,90 @@ async function runAutoWelcomeSequence() {
 }
 
 
-// Auto-Withdraw Sent Invitations older than 6 months
-async function runWithdrawOldInvitesSequence(minAgeMonths = 6) {
+// --- ROBUST SENT INVITATIONS HELPERS ---
+function findInvitationItems() {
+  const cards = Array.from(document.querySelectorAll('li.invitation-card, .invitation-card, li.artdeco-list__item, [data-view-name*="invitation"]'));
+  if (cards.length > 0) return cards;
+
+  // Fallback: search for any card container containing a Withdraw button
+  const buttons = Array.from(document.querySelectorAll('button, a.artdeco-button'));
+  const withdrawBtns = buttons.filter(b => {
+    if (b.closest('#law-floating-hud, header, #global-nav')) return false;
+    const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
+    return t.includes('withdraw');
+  });
+
+  return withdrawBtns.map(b => b.closest('li') || b.closest('.artdeco-list__item') || b.parentElement?.parentElement || b.parentElement);
+}
+
+function findWithdrawButton(row) {
+  if (!row) return null;
+  const buttons = Array.from(row.querySelectorAll('button, a.artdeco-button, div[role="button"]'));
+  const btn = buttons.find(b => {
+    if (b.closest('#law-floating-hud')) return false;
+    const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
+    return t.includes('withdraw');
+  });
+  if (btn) return btn;
+  if (row.tagName === 'BUTTON' && (row.innerText || '').toLowerCase().includes('withdraw')) return row;
+  return null;
+}
+
+function getRecipientName(row) {
+  if (!row) return 'Member';
+  const nameEl = row.querySelector('.invitation-card__title, a[href*="/in/"], h3, strong, [aria-hidden="true"]');
+  return nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : 'Member';
+}
+
+function getInvitationAgeDays(card) {
+  if (!card) return null;
+  const timeEl = card.querySelector('time, .invitation-card__time-sent, .invitation-card__meta, .time-ago');
+  const fullText = (timeEl ? (timeEl.innerText || timeEl.textContent) : (card.innerText || card.textContent || '')).toLowerCase();
+
+  // Years
+  const yr = fullText.match(/(\d+)\s*(?:year|yr|y)/i);
+  if (yr) return parseInt(yr[1], 10) * 365;
+
+  // Months
+  const mo = fullText.match(/(\d+)\s*(?:month|mo|m)\b/i);
+  if (mo) return parseInt(mo[1], 10) * 30;
+
+  // Weeks
+  const wk = fullText.match(/(\d+)\s*(?:week|wk|w)\b/i);
+  if (wk) return parseInt(wk[1], 10) * 7;
+
+  // Days
+  const dy = fullText.match(/(\d+)\s*(?:day|d)\b/i);
+  if (dy) return parseInt(dy[1], 10);
+
+  // Hours / Minutes / Yesterday
+  if (fullText.includes('yesterday')) return 1;
+  if (fullText.match(/hour|minute|hr|min/i)) return 0;
+
+  return null;
+}
+
+function formatAgeDays(days) {
+  if (days === null || days === undefined) return 'recent';
+  if (days >= 365) return `${Math.round(days / 365)} year(s) ago`;
+  if (days >= 30) return `${Math.round(days / 30)} month(s) ago`;
+  if (days >= 7) return `${Math.round(days / 7)} week(s) ago`;
+  return `${days} day(s) ago`;
+}
+
+// Auto-Withdraw Sent Invitations (supports configurable cutoff: e.g. 14 days, 30 days, 60 days, 180 days, or 0 = all)
+async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
   if (isRunning) return;
   isRunning = true;
   shouldStop = false;
+
+  const ageLabel = minAgeDays === 0 ? 'all pending invites' : (minAgeDays >= 30 ? `> ${Math.round(minAgeDays / 30)} month(s)` : `> ${Math.round(minAgeDays / 7)} week(s)`);
 
   try {
     chrome.storage.local.set({
       runtimeState: {
         isProcessing: true,
-        currentStatus: 'Starting invitation cleanup (> 6 months)...',
+        currentStatus: `Starting invitation cleanup (${ageLabel})...`,
         progressText: '',
         countdown: 0,
         lastRunTime: new Date().toISOString()
@@ -1212,68 +1286,77 @@ async function runWithdrawOldInvitesSequence(minAgeMonths = 6) {
     });
   } catch (e) {}
 
-  updateHud('Starting invitation cleanup (> 6 months)...');
+  updateHud(`Starting invitation cleanup (${ageLabel})...`);
   await sleep(1200);
 
   // If not on sent invitations page, navigate there
   if (!window.location.href.includes('/mynetwork/invitation-manager/sent')) {
     updateHud('Navigating to Sent Invitations page...');
-    sessionStorage.setItem('law_pending_withdraw', '1');
-    window.location.href = 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
+    sessionStorage.setItem('law_pending_withdraw', String(minAgeDays));
+    window.location.href = `https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1&min_days=${minAgeDays}`;
     isRunning = false;
     return;
   }
 
   let withdrawnCount = 0;
   let emptyRounds = 0;
+  let seenOldestDays = 0;
+  let totalCardsSeen = 0;
 
   try {
     while (!shouldStop && emptyRounds < 4) {
-      const rows = Array.from(document.querySelectorAll('.invitation-card, li.invitation-card, [data-view-name*="invitation"], .artdeco-list__item'));
+      const rows = findInvitationItems();
+      totalCardsSeen = Math.max(totalCardsSeen, rows.length);
       let foundInBatch = false;
 
       for (const row of rows) {
         if (shouldStop) break;
 
-        const rowText = (row.innerText || row.textContent || '').toLowerCase();
-        let isOld = false;
-        const monthMatch = rowText.match(/sent\s+(\d+)\s+month/i) || rowText.match(/(\d+)\s+month(?:s)?\s+ago/i);
-        const yearMatch = rowText.match(/sent\s+(\d+)\s+year/i) || rowText.match(/year/i);
+        const ageDays = getInvitationAgeDays(row);
+        if (ageDays !== null && ageDays > seenOldestDays) {
+          seenOldestDays = ageDays;
+        }
 
-        if (yearMatch) {
-          isOld = true;
-        } else if (monthMatch && parseInt(monthMatch[1], 10) >= minAgeMonths) {
+        let isOld = false;
+        if (minAgeDays === 0) {
+          isOld = true; // All pending invites
+        } else if (ageDays !== null && ageDays >= minAgeDays) {
           isOld = true;
         }
 
         if (isOld) {
-          foundInBatch = true;
-          const buttons = Array.from(row.querySelectorAll('button, a.artdeco-button'));
-          const withdrawBtn = buttons.find(b => {
-            const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').toLowerCase();
-            return t.includes('withdraw');
-          });
+          const withdrawBtn = findWithdrawButton(row);
 
           if (withdrawBtn) {
-            const personName = (row.querySelector('.invitation-card__title, h3, strong, a[href*="/in/"]')?.innerText || 'Member').trim();
-            updateHud(`Withdrawing invite to ${personName} (> 6 months old)...`);
+            foundInBatch = true;
+            const personName = getRecipientName(row);
+            const ageDisplay = ageDays !== null ? formatAgeDays(ageDays) : 'pending';
+            updateHud(`Withdrawing invite to ${personName} (${ageDisplay})...`);
             withdrawBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
             await sleep(600);
             withdrawBtn.click();
-            await sleep(1000);
+            await sleep(800);
 
-            // Confirm in dialog if modal appears
-            const modalBtn = Array.from(document.querySelectorAll('.artdeco-modal button, [role="dialog"] button')).find(b => {
-              const t = (b.innerText || b.textContent || '').trim().toLowerCase();
-              return t === 'withdraw';
-            });
-            if (modalBtn) {
-              modalBtn.click();
-              await sleep(1000);
+            // Confirm in dialog if modal appears (with up to 2.5s wait for animation)
+            for (let m = 0; m < 5; m++) {
+              const modal = document.querySelector('.artdeco-modal, [role="dialog"], [data-test-modal-container]');
+              if (modal) {
+                const modalBtns = Array.from(modal.querySelectorAll('button'));
+                const confirmBtn = modalBtns.find(b => {
+                  const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
+                  return t === 'withdraw' || b.classList.contains('artdeco-button--primary');
+                });
+                if (confirmBtn) {
+                  confirmBtn.click();
+                  await sleep(1000);
+                  break;
+                }
+              }
+              await sleep(300);
             }
 
             withdrawnCount++;
-            updateHud(`Withdrawn ${withdrawnCount} old invite(s)...`);
+            updateHud(`Withdrawn ${withdrawnCount} invite(s)...`);
             await sleep(1200);
           }
         }
@@ -1291,7 +1374,18 @@ async function runWithdrawOldInvitesSequence(minAgeMonths = 6) {
       }
     }
 
-    const msg = shouldStop ? 'Withdrawal stopped by user.' : `Done! Withdrawn ${withdrawnCount} invitations older than 6 months.`;
+    let msg = '';
+    if (shouldStop) {
+      msg = 'Withdrawal stopped by user.';
+    } else if (withdrawnCount > 0) {
+      msg = `Done! Withdrawn ${withdrawnCount} invitations (${ageLabel}).`;
+    } else if (totalCardsSeen > 0) {
+      const oldestText = seenOldestDays > 0 ? formatAgeDays(seenOldestDays) : 'recent';
+      msg = `Found ${totalCardsSeen} invitations, but none are ${ageLabel} (oldest was sent ${oldestText}). Adjust the age filter in the extension if you wish to withdraw them.`;
+    } else {
+      msg = 'No pending sent invitations found on this page.';
+    }
+
     isRunning = false;
     updateHud(msg);
     try {
@@ -1305,7 +1399,7 @@ async function runWithdrawOldInvitesSequence(minAgeMonths = 6) {
         }
       });
     } catch (e) {}
-    setTimeout(hideHud, 6000);
+    setTimeout(hideHud, 7000);
 
   } catch (err) {
     console.error('Withdraw invites error:', err);
@@ -1342,7 +1436,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'START_WITHDRAW_INVITES') {
     if (!isRunning) {
-      runWithdrawOldInvitesSequence(message.minAgeMonths || 6);
+      const minDays = typeof message.minAgeDays === 'number' 
+        ? message.minAgeDays 
+        : (typeof message.minAgeMonths === 'number' ? message.minAgeMonths * 30 : 30);
+      runWithdrawOldInvitesSequence(minDays);
       sendResponse({ success: true, started: true });
     } else {
       sendResponse({ success: true, alreadyRunning: true });
@@ -1387,19 +1484,23 @@ function checkAutoStartOnPageLoad() {
     }
   } else if (currentUrl.includes('/mynetwork/invitation-manager/sent')) {
     const hasParam = urlParams.get('law_withdraw') === '1';
-    const hasSession = sessionStorage.getItem('law_pending_withdraw') === '1';
+    const hasSession = sessionStorage.getItem('law_pending_withdraw');
 
     if (hasParam || hasSession) {
       sessionStorage.removeItem('law_pending_withdraw');
+      const minDays = urlParams.get('min_days') 
+        ? parseInt(urlParams.get('min_days'), 10) 
+        : (hasSession ? parseInt(hasSession, 10) : 30);
+
       try {
-        const cleanUrl = window.location.href.replace(/[?&]law_withdraw=1/, '');
+        const cleanUrl = window.location.href.replace(/[?&]law_withdraw=1(&min_days=\d+)?/, '');
         window.history.replaceState({}, document.title, cleanUrl);
       } catch (e) {}
 
-      console.log('[LAW] Auto-withdraw detected on sent invitations page load. Starting in 1.8s...');
+      console.log(`[LAW] Auto-withdraw detected on sent invitations page load (minDays=${minDays}). Starting in 1.8s...`);
       setTimeout(() => {
         if (!isRunning) {
-          runWithdrawOldInvitesSequence(6);
+          runWithdrawOldInvitesSequence(minDays);
         }
       }, 1800);
     }

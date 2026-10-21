@@ -36,7 +36,8 @@ const DEFAULT_SETTINGS = {
   webhookUrl: "",     // optional webhook endpoint (Zapier, Make, Google Sheets)
   followUpEnabled: false,
   followUpDays: 4,
-  followUpTemplate: "Hi {firstName}, following up on my previous note. Hope you're having a great week!"
+  followUpTemplate: "Hi {firstName}, following up on my previous note. Hope you're having a great week!",
+  withdrawAgeDays: 30
 };
 
 function getTodayString() {
@@ -233,13 +234,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       if (message.action === 'START_WITHDRAW_INVITES') {
         const allTabs = await chrome.tabs.query({});
+        const minDays = typeof message.minAgeDays === 'number' 
+          ? message.minAgeDays 
+          : (message.minAgeMonths ? message.minAgeMonths * 30 : 30);
         let targetTab = allTabs.find(t => t.url && t.url.includes('/mynetwork/invitation-manager/sent'));
-        const targetUrl = 'https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1';
+        const targetUrl = `https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1&min_days=${minDays}`;
 
         if (targetTab) {
           await chrome.tabs.update(targetTab.id, { active: true });
           try {
-            await chrome.tabs.sendMessage(targetTab.id, { action: 'START_WITHDRAW_INVITES', minAgeMonths: 6 });
+            await chrome.tabs.sendMessage(targetTab.id, { action: 'START_WITHDRAW_INVITES', minAgeDays: minDays });
           } catch (e) {
             await chrome.tabs.update(targetTab.id, { url: targetUrl });
           }
