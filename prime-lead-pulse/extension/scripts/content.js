@@ -199,30 +199,33 @@ function formatEventTime(iso) {
 }
 
 function getActiveSenderEmail(composeWindow) {
+  // 1. If compose window has an explicit "from" dropdown input (multi-send-as identities)
   if (composeWindow) {
-    const fromInput = composeWindow.querySelector('input[name="from"]');
+    const fromInput = composeWindow.querySelector('input[name="from"], select[name="from"]');
     if (fromInput && fromInput.value) {
       const match = fromInput.value.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
-      if (match) return match[1];
-    }
-    const fromContainer = composeWindow.querySelector('.az9, tr:has([name="from"]), [aria-label*="Send as" i]');
-    if (fromContainer) {
-      const em = fromContainer.querySelector('[data-hovercard-id]')?.getAttribute('data-hovercard-id') ||
-                 fromContainer.querySelector('[email]')?.getAttribute('email') ||
-                 fromContainer.textContent;
-      const match = (em || '').match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
-      if (match) return match[1];
+      if (match) return match[1].toLowerCase();
     }
   }
 
+  // 2. Active Gmail user account profile button (top-right of screen)
   const accountBtn = document.querySelector('a[aria-label*="@"], button[aria-label*="@"], [aria-label*="Google Account" i]');
   if (accountBtn) {
     const label = accountBtn.getAttribute('aria-label') || '';
     const match = label.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
-    if (match) return match[1];
+    if (match) return match[1].toLowerCase();
   }
+
+  // 3. Document title (e.g. "Sent Mail - vicky@diyflatfee.com - Gmail")
   const titleMatch = document.title.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
-  return titleMatch ? titleMatch[1] : null;
+  if (titleMatch) return titleMatch[1].toLowerCase();
+
+  // 4. Fallback to known user sessions in extension storage
+  if (knownUserEmails && knownUserEmails.size > 0) {
+    return Array.from(knownUserEmails)[0].toLowerCase();
+  }
+
+  return 'unknown';
 }
 
 function recipientMatchesThread(eRecipient, participantEmails, participantNames, senderText) {
@@ -881,6 +884,15 @@ document.addEventListener('click', async (e) => {
   let recipient = formattedRecipients.join(', ');
   if (!recipient) {
     recipient = compose.querySelector('input[name="to"]')?.value || 'Unknown Recipient';
+  }
+
+  // Safety guard: The sender cannot be one of the recipients!
+  // If senderEmail accidentally matched a recipient, force fallback to active Gmail user
+  if (senderEmail && emailMap.has(senderEmail.toLowerCase())) {
+    const fallbackEmail = getActiveSenderEmail(null);
+    if (fallbackEmail && !emailMap.has(fallbackEmail.toLowerCase())) {
+      senderEmail = fallbackEmail;
+    }
   }
 
   if (Object.keys(contactUpdates).length > 0) {

@@ -357,6 +357,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // ============================================================
 // Notification Trigger Helper (Deduplicated & Subject-Grouped)
 // ============================================================
+const TEAM_NAMES = {
+  'michael.primerealops.com@gmail.com': 'Michael Ross',
+  'michael.primerealops@gmail.com': 'Michael Ross',
+  'tyler.primerealops@gmail.com': 'Tyler Durden',
+  'shiva.primerealops@gmail.com': 'Shiva Nath',
+  'taarak.primerealops@gmail.com': 'Taarak Vakil',
+  'taarak.prime@diyflatfee.com': 'Taarak Vakil',
+  'tony.primerealops@gmail.com': 'Tony Rydinger',
+  'kisha.primerealops@gmail.com': 'Kisha Brown',
+  'victor.primerealops@gmail.com': 'Victor Wiseman',
+  'aisha.primerealops@gmail.com': 'Aisha Patel',
+  'dan.primerealops@gmail.com': 'Dan Kenton',
+  'samantha.primerealops@gmail.com': 'Samantha Wheeler',
+  'nisha.primerealops@gmail.com': 'Nisha Desai',
+  'dlewis@diyflatfee.com': 'Darrell Lewis',
+  'vicky@diyflatfee.com': 'Vicky Thakkar'
+};
+
 function getFriendlyRecipientName(rawRecipient, contactNames) {
   if (!rawRecipient) return 'Someone';
 
@@ -369,7 +387,13 @@ function getFriendlyRecipientName(rawRecipient, contactNames) {
 
   const single = list[0] || rawRecipient;
 
-  // 1. If format is "Tyler Durden <Tyler.Primerealops@gmail.com>", extract "Tyler Durden"
+  // 1. Check pre-seeded team names
+  const cleanEmail = single.replace(/.*<([^>]+)>.*/, '$1').replace(/[<>]/g, '').trim().toLowerCase();
+  if (TEAM_NAMES[cleanEmail]) {
+    return TEAM_NAMES[cleanEmail];
+  }
+
+  // 2. If format is "Tyler Durden <Tyler.Primerealops@gmail.com>", extract "Tyler Durden"
   const nameMatch = single.match(/^([^<]+)<[^>]+>/);
   if (nameMatch && nameMatch[1].trim()) {
     let parsedName = nameMatch[1].trim();
@@ -377,16 +401,16 @@ function getFriendlyRecipientName(rawRecipient, contactNames) {
     if (!parsedName.includes('@') && parsedName.length >= 2) return parsedName;
   }
 
-  // 2. Check contactNames dictionary
-  const cleanEmail = single.replace(/.*<([^>]+)>.*/, '$1').replace(/[<>]/g, '').trim().toLowerCase();
+  // 3. Check contactNames dictionary
   if (contactNames && contactNames[cleanEmail]) {
     return contactNames[cleanEmail].replace(/\s*\([^)]*@?[^)]*\)/g, '').trim();
   }
 
-  // 3. Fallback: Parse name from email username if dotted (e.g. "tyler.durden@..." or "tyler.primerealops@...")
+  // 4. Fallback: Parse name from email username if dotted (e.g. "tyler.durden@..." or "tyler.primerealops@...")
   const username = cleanEmail.split('@')[0];
   if (username && username.includes('.')) {
-    const parts = username.split('.').filter(p => p.length > 1 && !['primerealops', 'prime', 'diyflatfee', 'diyrealty'].includes(p.toLowerCase()));
+    const ignoreWords = ['primerealops', 'prime', 'diyflatfee', 'diyrealty', 'realty', 'real', 'com', 'org', 'net', 'co', 'in', 'io', 'inc', 'llc', 'ops', 'bridge', 'pulse'];
+    const parts = username.split('.').filter(p => p.length > 1 && !ignoreWords.includes(p.toLowerCase()));
     if (parts.length > 0) {
       return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
     }
