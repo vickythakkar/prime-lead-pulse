@@ -3,15 +3,29 @@
  * Robust, synchronous event binding with direct storage access.
  */
 
+const DEFAULT_WELCOME_VARIANTS = [
+  "Hi {firstName}, thanks for connecting! Looking forward to staying in touch and seeing what you're working on. Hope you have a wonderful {dayOfWeek}!",
+  "{timeOfDay} {firstName}, glad to link up with you here on LinkedIn! Excited to follow your journey at {company}. Wishing you a productive week ahead.",
+  "Hello {firstName}, appreciate the connection! Always looking to expand my network with fellow professionals. Hope business is going great on your end this {dayOfWeek}!",
+  "Hey {firstName}, great connecting with you! Looking forward to keeping in touch and following your updates. Have a fantastic rest of your {dayOfWeek}!"
+];
+
+const DEFAULT_REALTOR_VARIANTS = [
+  "Hi {firstName}, thanks for connecting! Always great to link up with fellow real estate professionals. How is the market treating you recently in your area?",
+  "{timeOfDay} {firstName}, glad to connect with you! Great to see your work in real estate at {company}. How have buyer and seller trends been for you lately?",
+  "Hey {firstName}, appreciate the connection! Always looking to network with active agents and brokers. How is inventory and activity looking on your side this {dayOfWeek}?",
+  "Hello {firstName}, thanks for accepting my request! Always glad to have top real estate pros in my circle. Hope you're having a productive week—how's business treating you?"
+];
+
 const DEFAULT_SETTINGS = {
   enabled: true,
-  template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  template: DEFAULT_WELCOME_VARIANTS.join("\n\n---OR---\n\n"),
   rules: [
     {
       id: "rule_realtors",
       name: "US Realtors & Real Estate",
       keywords: "realtor, real estate, broker, realty, mortgage, agent, appraisal, investment, remax, keller williams, exp",
-      template: "Hi {firstName}, thanks for connecting! Always great to connect with fellow real estate professionals. How is the market treating you recently?"
+      template: DEFAULT_REALTOR_VARIANTS.join("\n\n---OR---\n\n")
     }
   ],
   dailyLimit: 15,
@@ -30,6 +44,36 @@ function getTodayString() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function generateContextPreservingVariants(baseText) {
+  const text = (baseText || '').trim();
+  const isRealtor = /realtor|real estate|broker|realty|mortgage/i.test(text);
+
+  if (isRealtor) {
+    return DEFAULT_REALTOR_VARIANTS.slice();
+  }
+
+  const usesCompany = /\{company\}/i.test(text);
+  const companyPhrase = usesCompany ? " at {company}" : "";
+
+  return [
+    `Hi {firstName}, thanks for connecting! Looking forward to staying in touch and seeing what you're working on. Hope you have a wonderful {dayOfWeek}!`,
+    `{timeOfDay} {firstName}, glad to link up with you here on LinkedIn! Excited to follow your journey${companyPhrase}. Wishing you a productive week ahead.`,
+    `Hello {firstName}, appreciate the connection! Always looking to expand my network with fellow professionals. Hope business is going great on your end this {dayOfWeek}!`,
+    `Hey {firstName}, great connecting with you! Looking forward to keeping in touch and following your updates. Have a fantastic rest of your {dayOfWeek}!`
+  ];
+}
+
+function parseVariants(rawTemplate, fallbackList) {
+  if (!rawTemplate || typeof rawTemplate !== 'string' || !rawTemplate.trim()) {
+    return (fallbackList || DEFAULT_WELCOME_VARIANTS).slice();
+  }
+  const parts = rawTemplate
+    .split(/(?:\r?\n\s*---OR---\s*\r?\n|\r?\n\s*===VARIANT===\s*\r?\n|\r?\n\s*---\s*\r?\n)/i)
+    .map(v => v.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : [rawTemplate.trim()];
+}
+
 function initDashboard() {
   // Navigation
   const navItems = document.querySelectorAll('.nav-item');
@@ -40,6 +84,7 @@ function initDashboard() {
   const statToday = document.getElementById('stat-today');
   const statTodaySub = document.getElementById('stat-today-sub');
   const btnDashResetToday = document.getElementById('btn-dash-reset-today');
+  const btnDashClearHistoryQuick = document.getElementById('btn-dash-clear-history-quick');
   const statTotal = document.getElementById('stat-total');
   const statStatus = document.getElementById('stat-status');
   const statLastRun = document.getElementById('stat-last-run');
@@ -54,11 +99,19 @@ function initDashboard() {
   // Template Form
   const dashTemplateInput = document.getElementById('dash-template-input');
   const dashTemplatePreview = document.getElementById('dash-template-preview');
+  const dashDefaultVariantTabs = document.getElementById('dash-default-variant-tabs');
+  const btnDashAutoGenVariants = document.getElementById('btn-dash-auto-gen-variants');
+  const btnDashDeleteActiveVariant = document.getElementById('btn-dash-delete-active-variant');
+  const btnDashShufflePreview = document.getElementById('btn-dash-shuffle-preview');
   const btnDashSaveTemplate = document.getElementById('btn-dash-save-template');
   const tagPills = document.querySelectorAll('.tag-pill:not(.dash-rule-tag-pill):not([data-insert-followup])');
   const dashRulesContainer = document.getElementById('dash-rules-container');
   const btnDashAddRule = document.getElementById('btn-dash-add-rule');
   let currentDashRules = [];
+
+  let dashDefaultVariants = DEFAULT_WELCOME_VARIANTS.slice();
+  let currentDashVariantIndex = 0;
+  let previewDashVariantIndex = 0;
 
   // Safety & Integrations Form
   const dashSettingDaily = document.getElementById('dash-setting-daily');
@@ -93,19 +146,59 @@ function initDashboard() {
     }, 2500);
   }
 
-  function updatePreview() {
-    if (!dashTemplateInput || !dashTemplatePreview) return;
-    let raw = dashTemplateInput.value || '';
-    if (raw.includes('---OR---')) {
-      raw = raw.split('---OR---')[0].trim();
-    } else if (raw.includes('===VARIANT===')) {
-      raw = raw.split('===VARIANT===')[0].trim();
+  function renderDashDefaultVariantTabs() {
+    if (!dashDefaultVariantTabs || !dashTemplateInput) return;
+    dashDefaultVariantTabs.innerHTML = '';
+
+    if (dashDefaultVariants.length === 0) {
+      dashDefaultVariants = DEFAULT_WELCOME_VARIANTS.slice();
     }
-    // Preview first spintax branch
-    let sample = raw.replace(/\{([^{}]+?\|[^{}]+?)\}/g, (match, choices) => {
-      return choices.split('|')[0].trim();
+
+    dashDefaultVariants.forEach((v, idx) => {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = `variant-tab-pill ${idx === currentDashVariantIndex ? 'active' : ''}`;
+      pill.textContent = `Variant ${idx + 1}`;
+      pill.addEventListener('click', (e) => {
+        e.preventDefault();
+        dashDefaultVariants[currentDashVariantIndex] = dashTemplateInput.value;
+        currentDashVariantIndex = idx;
+        renderDashDefaultVariantTabs();
+      });
+      dashDefaultVariantTabs.appendChild(pill);
     });
-    sample = sample
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'variant-tab-add';
+    addBtn.textContent = '+ Add Variant';
+    addBtn.title = 'Add another whole-message variation';
+    addBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      dashDefaultVariants[currentDashVariantIndex] = dashTemplateInput.value;
+      const suggestions = generateContextPreservingVariants(dashTemplateInput.value);
+      const newVar = suggestions[dashDefaultVariants.length % suggestions.length] || "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.";
+      dashDefaultVariants.push(newVar);
+      currentDashVariantIndex = dashDefaultVariants.length - 1;
+      renderDashDefaultVariantTabs();
+      showToast(`Added Variant ${dashDefaultVariants.length}`);
+    });
+    dashDefaultVariantTabs.appendChild(addBtn);
+
+    dashTemplateInput.value = dashDefaultVariants[currentDashVariantIndex] || '';
+    if (btnDashDeleteActiveVariant) {
+      btnDashDeleteActiveVariant.style.display = dashDefaultVariants.length > 1 ? 'inline-block' : 'none';
+    }
+    updatePreview();
+  }
+
+  function updatePreview() {
+    if (!dashTemplatePreview) return;
+    if (dashTemplateInput) {
+      dashDefaultVariants[currentDashVariantIndex] = dashTemplateInput.value;
+    }
+    const targetVariant = dashDefaultVariants[previewDashVariantIndex % Math.max(1, dashDefaultVariants.length)] || dashTemplateInput?.value || '';
+    const sample = targetVariant
       .replace(/\{firstName\}/gi, 'Sarah')
       .replace(/\{fullName\}/gi, 'Sarah Jenkins')
       .replace(/\{company\}/gi, 'Apex Realty')
@@ -170,7 +263,10 @@ function initDashboard() {
             </div>
           </div>
           <textarea class="code-textarea dash-rule-template-input" rows="3" placeholder="Message to send when keywords match...">${escapeHtml(rule.template || '')}</textarea>
-          <p style="font-size: 11px; color: #64748b; margin-top: 4px;">Tip: Separate full variants with <code>---OR---</code>, or use inline spintax <code>{Hi|Hello}</code>.</p>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 5px;">
+            <p style="font-size: 11px; color: #64748b; margin: 0;">Separate full alternative variants with <code>---OR---</code>.</p>
+            <button type="button" class="btn-generate-variants dash-rule-gen-btn" data-rule-idx="${idx}">✨ Auto-Add 3 Safe Variants</button>
+          </div>
         </div>
       `;
 
@@ -190,6 +286,22 @@ function initDashboard() {
           textarea.value = textarea.value.substring(0, start) + tag + textarea.value.substring(end);
           textarea.focus();
           textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+        }
+      });
+    });
+
+    // Rule Auto-generate buttons
+    dashRulesContainer.querySelectorAll('.dash-rule-gen-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const card = btn.closest('.dash-rule-card');
+        const textarea = card?.querySelector('.dash-rule-template-input');
+        const kwInput = card?.querySelector('.dash-rule-keywords-input');
+        if (textarea) {
+          const isRealtor = /realtor|real estate|broker/i.test((kwInput?.value || '') + ' ' + (textarea.value || ''));
+          const variants = isRealtor ? DEFAULT_REALTOR_VARIANTS : generateContextPreservingVariants(textarea.value);
+          textarea.value = variants.join('\n\n---OR---\n\n');
+          showToast('✨ Added safe whole-message variants!');
         }
       });
     });
@@ -358,15 +470,69 @@ function initDashboard() {
     });
   }
 
+  // Auto-Generate Variations button
+  if (btnDashAutoGenVariants) {
+    btnDashAutoGenVariants.addEventListener('click', (e) => {
+      e.preventDefault();
+      const base = (dashTemplateInput?.value || '').trim() || dashDefaultVariants[0] || '';
+      dashDefaultVariants = generateContextPreservingVariants(base);
+      currentDashVariantIndex = 0;
+      renderDashDefaultVariantTabs();
+      showToast('✨ 4 Safe Whole-Message Variations Ready!');
+    });
+  }
+
+  // Delete Active Variant button
+  if (btnDashDeleteActiveVariant) {
+    btnDashDeleteActiveVariant.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (dashDefaultVariants.length <= 1) {
+        showToast('At least one variation required');
+        return;
+      }
+      dashDefaultVariants.splice(currentDashVariantIndex, 1);
+      currentDashVariantIndex = Math.max(0, currentDashVariantIndex - 1);
+      renderDashDefaultVariantTabs();
+      showToast('Variation removed');
+    });
+  }
+
+  // Shuffle Preview button
+  if (btnDashShufflePreview) {
+    btnDashShufflePreview.addEventListener('click', (e) => {
+      e.preventDefault();
+      previewDashVariantIndex = (previewDashVariantIndex + 1) % Math.max(1, dashDefaultVariants.length);
+      updatePreview();
+      showToast(`Previewing Variant ${previewDashVariantIndex + 1}/${dashDefaultVariants.length}`);
+    });
+  }
+
+  // Quick Clear Sent History button
+  if (btnDashClearHistoryQuick) {
+    btnDashClearHistoryQuick.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!confirm("Clear your sent message history?\n\nThis will allow the extension to send welcome messages to previously messaged/skipped connections.")) {
+        return;
+      }
+      try {
+        await chrome.storage.local.set({ sentHistory: [] });
+        showToast("Sent history cleared! Connections can now be messaged again.");
+        await syncDashboard();
+      } catch (err) {
+        console.error('Failed to clear history:', err);
+      }
+    });
+  }
+
   // Save Template
   if (btnDashSaveTemplate) {
     btnDashSaveTemplate.addEventListener('click', async (e) => {
       e.preventDefault();
-      const template = dashTemplateInput.value.trim();
-      if (!template) {
-        showToast('Default template cannot be empty');
-        return;
+      if (dashTemplateInput) {
+        dashDefaultVariants[currentDashVariantIndex] = dashTemplateInput.value.trim();
       }
+      const cleaned = dashDefaultVariants.map(v => v.trim()).filter(Boolean);
+      const template = cleaned.length > 0 ? cleaned.join('\n\n---OR---\n\n') : DEFAULT_SETTINGS.template;
       const rules = collectDashRulesFromDom();
 
       // Validate rules
@@ -387,7 +553,7 @@ function initDashboard() {
         const updated = { ...DEFAULT_SETTINGS, ...settings, template, rules };
         await chrome.storage.local.set({ settings: updated });
         currentDashRules = rules;
-        showToast('Templates & rules saved successfully!');
+        showToast('All message variations & rules saved successfully!');
       } catch (err) {
         showToast('Error saving templates');
       }
@@ -399,17 +565,28 @@ function initDashboard() {
     btnDashResetToday.addEventListener('click', async (e) => {
       e.preventDefault();
       try {
-        await chrome.runtime.sendMessage({ action: 'RESET_TODAY_COUNT' });
-        showToast("Today's message counter reset to 0");
-        await syncDashboard();
-      } catch (err) {
         const today = getTodayString();
-        const { stats = {} } = await chrome.storage.local.get('stats');
-        stats.todayCount = 0;
-        stats.lastResetDate = today;
+        const data = await chrome.storage.local.get(['stats', 'settings']);
+        const stats = { ...(data.stats || {}), todayCount: 0, lastResetDate: today };
         await chrome.storage.local.set({ stats });
+
+        // Immediate UI update
+        if (statToday) statToday.textContent = '0';
+        const limit = Number(data.settings?.dailyLimit);
+        const isUnlimited = isNaN(limit) || limit <= 0;
+        if (statTodaySub) statTodaySub.textContent = isUnlimited ? 'Daily limit: Unlimited' : `Daily limit: ${limit}`;
+        if (statStatus) {
+          statStatus.textContent = 'Ready';
+          statStatus.style.color = '#10b981';
+        }
+
+        try { chrome.action.setBadgeText({ text: '' }); } catch (e) {}
+        try { chrome.runtime.sendMessage({ action: 'RESET_TODAY_COUNT' }); } catch (e) {}
+
         showToast("Today's message counter reset to 0");
-        await syncDashboard();
+      } catch (err) {
+        console.error('Reset count error:', err);
+        showToast("Failed to reset count");
       }
     });
   }
@@ -650,9 +827,14 @@ function initDashboard() {
         statLastRun.textContent = runtimeState.lastRunTime ? `Last run: ${formatDate(runtimeState.lastRunTime)}` : 'Last run: Never';
       }
 
-      if (dashTemplateInput && document.activeElement !== dashTemplateInput) {
-        dashTemplateInput.value = settings.template || DEFAULT_SETTINGS.template;
-        updatePreview();
+      // Template & Variants rendering
+      const isEditingTemplate = dashTemplateInput && document.activeElement === dashTemplateInput;
+      if (!isEditingTemplate) {
+        dashDefaultVariants = parseVariants(settings.template || DEFAULT_SETTINGS.template);
+        if (currentDashVariantIndex >= dashDefaultVariants.length) {
+          currentDashVariantIndex = 0;
+        }
+        renderDashDefaultVariantTabs();
       }
 
       // Render Rules if not currently editing them

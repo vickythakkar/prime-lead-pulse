@@ -7,15 +7,29 @@ let isRunning = false;
 let shouldStop = false;
 let hudElement = null;
 
+const DEFAULT_WELCOME_TEMPLATE = [
+  "Hi {firstName}, thanks for connecting! Looking forward to staying in touch and seeing what you're working on. Hope you have a wonderful {dayOfWeek}!",
+  "{timeOfDay} {firstName}, glad to link up with you here on LinkedIn! Excited to follow your journey at {company}. Wishing you a productive week ahead.",
+  "Hello {firstName}, appreciate the connection! Always looking to expand my network with fellow professionals. Hope business is going great on your end this {dayOfWeek}!",
+  "Hey {firstName}, great connecting with you! Looking forward to keeping in touch and following your updates. Have a fantastic rest of your {dayOfWeek}!"
+].join("\n\n---OR---\n\n");
+
+const DEFAULT_REALTOR_TEMPLATE = [
+  "Hi {firstName}, thanks for connecting! Always great to link up with fellow real estate professionals. How is the market treating you recently in your area?",
+  "{timeOfDay} {firstName}, glad to connect with you! Great to see your work in real estate at {company}. How have buyer and seller trends been for you lately?",
+  "Hey {firstName}, appreciate the connection! Always looking to network with active agents and brokers. How is inventory and activity looking on your side this {dayOfWeek}?",
+  "Hello {firstName}, thanks for accepting my request! Always glad to have top real estate pros in my circle. Hope you're having a productive week—how's business treating you?"
+].join("\n\n---OR---\n\n");
+
 const DEFAULT_SETTINGS = {
   enabled: true,
-  template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  template: DEFAULT_WELCOME_TEMPLATE,
   rules: [
     {
       id: "rule_realtors",
       name: "US Realtors & Real Estate",
       keywords: "realtor, real estate, broker, realty, mortgage, agent, appraisal, investment, remax, keller williams, exp",
-      template: "Hi {firstName}, thanks for connecting! Always great to connect with fellow real estate professionals. How is the market treating you recently?"
+      template: DEFAULT_REALTOR_TEMPLATE
     }
   ],
   dailyLimit: 15,
@@ -657,7 +671,12 @@ function resolveMessageTemplate(rawTemplate, conn) {
   // Randomly pick one full message variant
   let selected = variants.length > 1
     ? variants[Math.floor(Math.random() * variants.length)]
-    : rawTemplate;
+    : (variants[0] || rawTemplate);
+
+  const variantIndex = variants.indexOf(selected);
+  if (variants.length > 1) {
+    console.log(`[LAW] Selected full message variant #${variantIndex + 1} of ${variants.length} for ${conn.name}`);
+  }
 
   // 2. Resolve Spintax: {option 1|option 2|option 3}
   let spintaxRegex = /\{([^{}]+?\|[^{}]+?)\}/g;
@@ -849,6 +868,12 @@ async function runAutoWelcomeSequence() {
     let consecutiveEmptyScrolls = 0;
 
     while (!shouldStop) {
+      // Re-read storage stats so if user clicked Reset Today Count, it reflects immediately
+      try {
+        const fresh = await getExtensionData();
+        currentTodayCount = fresh.stats.todayCount;
+      } catch (e) {}
+
       if (!isUnlimited && currentTodayCount >= Number(settings.dailyLimit)) {
         updateHud(`Daily safety limit reached (${currentTodayCount}/${settings.dailyLimit}). Stopping for today.`);
         break;
@@ -1084,9 +1109,14 @@ async function runAutoWelcomeSequence() {
 
     }
 
-    const finishMsg = shouldStop
-      ? 'Automation stopped by user.'
-      : `Done! Sent ${processedInSession} welcome messages.`;
+    let finishMsg = '';
+    if (shouldStop) {
+      finishMsg = 'Automation stopped by user.';
+    } else if (processedInSession > 0) {
+      finishMsg = `Done! Sent ${processedInSession} welcome messages.`;
+    } else {
+      finishMsg = 'All visible connections were already messaged previously. Click "Clear History" in extension if you want to re-message them.';
+    }
 
     updateHud(finishMsg, formatQuota(currentTodayCount, settings.dailyLimit));
     await chrome.runtime.sendMessage({

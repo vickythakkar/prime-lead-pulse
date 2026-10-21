@@ -3,15 +3,29 @@
  * Robust, synchronous event binding with direct storage access.
  */
 
+const DEFAULT_WELCOME_VARIANTS = [
+  "Hi {firstName}, thanks for connecting! Looking forward to staying in touch and seeing what you're working on. Hope you have a wonderful {dayOfWeek}!",
+  "{timeOfDay} {firstName}, glad to link up with you here on LinkedIn! Excited to follow your journey at {company}. Wishing you a productive week ahead.",
+  "Hello {firstName}, appreciate the connection! Always looking to expand my network with fellow professionals. Hope business is going great on your end this {dayOfWeek}!",
+  "Hey {firstName}, great connecting with you! Looking forward to keeping in touch and following your updates. Have a fantastic rest of your {dayOfWeek}!"
+];
+
+const DEFAULT_REALTOR_VARIANTS = [
+  "Hi {firstName}, thanks for connecting! Always great to link up with fellow real estate professionals. How is the market treating you recently in your area?",
+  "{timeOfDay} {firstName}, glad to connect with you! Great to see your work in real estate at {company}. How have buyer and seller trends been for you lately?",
+  "Hey {firstName}, appreciate the connection! Always looking to network with active agents and brokers. How is inventory and activity looking on your side this {dayOfWeek}?",
+  "Hello {firstName}, thanks for accepting my request! Always glad to have top real estate pros in my circle. Hope you're having a productive week—how's business treating you?"
+];
+
 const DEFAULT_SETTINGS = {
   enabled: true,
-  template: "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.",
+  template: DEFAULT_WELCOME_VARIANTS.join("\n\n---OR---\n\n"),
   rules: [
     {
       id: "rule_realtors",
       name: "US Realtors & Real Estate",
       keywords: "realtor, real estate, broker, realty, mortgage, agent, appraisal, investment, remax, keller williams, exp",
-      template: "Hi {firstName}, thanks for connecting! Always great to connect with fellow real estate professionals. How is the market treating you recently?"
+      template: DEFAULT_REALTOR_VARIANTS.join("\n\n---OR---\n\n")
     }
   ],
   dailyLimit: 15,
@@ -26,6 +40,36 @@ function getTodayString() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function generateContextPreservingVariants(baseText) {
+  const text = (baseText || '').trim();
+  const isRealtor = /realtor|real estate|broker|realty|mortgage/i.test(text);
+
+  if (isRealtor) {
+    return DEFAULT_REALTOR_VARIANTS.slice();
+  }
+
+  const usesCompany = /\{company\}/i.test(text);
+  const companyPhrase = usesCompany ? " at {company}" : "";
+
+  return [
+    `Hi {firstName}, thanks for connecting! Looking forward to staying in touch and seeing what you're working on. Hope you have a wonderful {dayOfWeek}!`,
+    `{timeOfDay} {firstName}, glad to link up with you here on LinkedIn! Excited to follow your journey${companyPhrase}. Wishing you a productive week ahead.`,
+    `Hello {firstName}, appreciate the connection! Always looking to expand my network with fellow professionals. Hope business is going great on your end this {dayOfWeek}!`,
+    `Hey {firstName}, great connecting with you! Looking forward to keeping in touch and following your updates. Have a fantastic rest of your {dayOfWeek}!`
+  ];
+}
+
+function parseVariants(rawTemplate, fallbackList) {
+  if (!rawTemplate || typeof rawTemplate !== 'string' || !rawTemplate.trim()) {
+    return (fallbackList || DEFAULT_WELCOME_VARIANTS).slice();
+  }
+  const parts = rawTemplate
+    .split(/(?:\r?\n\s*---OR---\s*\r?\n|\r?\n\s*===VARIANT===\s*\r?\n|\r?\n\s*---\s*\r?\n)/i)
+    .map(v => v.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : [rawTemplate.trim()];
+}
+
 function initPopup() {
   // Elements
   const masterToggle = document.getElementById('master-toggle');
@@ -34,6 +78,7 @@ function initPopup() {
   const statusText = document.getElementById('status-text');
   const quotaBadge = document.getElementById('quota-badge');
   const btnResetToday = document.getElementById('btn-reset-today');
+  const btnClearHistoryQuick = document.getElementById('btn-clear-history-quick');
   const quotaProgressFill = document.getElementById('quota-progress-fill');
   const btnTriggerScan = document.getElementById('btn-trigger-scan');
   const btnWithdrawInvites = document.getElementById('btn-withdraw-invites');
@@ -46,11 +91,19 @@ function initPopup() {
   // Template tab
   const templateInput = document.getElementById('template-input');
   const templatePreview = document.getElementById('template-preview');
+  const defaultVariantTabs = document.getElementById('default-variant-tabs');
+  const btnAutoGenVariants = document.getElementById('btn-auto-gen-variants');
+  const btnDeleteActiveVariant = document.getElementById('btn-delete-active-variant');
+  const btnShufflePreview = document.getElementById('btn-shuffle-preview');
   const btnSaveTemplate = document.getElementById('btn-save-template');
   const tagButtons = document.querySelectorAll('.tag-btn:not(.rule-tag-btn)');
   const popupRulesContainer = document.getElementById('popup-rules-container');
   const btnAddRule = document.getElementById('btn-add-rule');
   let currentRules = [];
+
+  let defaultVariants = DEFAULT_WELCOME_VARIANTS.slice();
+  let currentDefaultVariantIndex = 0;
+  let previewVariantIndex = 0;
 
   // Settings tab
   const settingDailyLimit = document.getElementById('setting-daily-limit');
@@ -80,12 +133,59 @@ function initPopup() {
     }, 2200);
   }
 
+  function renderDefaultVariantTabs() {
+    if (!defaultVariantTabs || !templateInput) return;
+    defaultVariantTabs.innerHTML = '';
+
+    if (defaultVariants.length === 0) {
+      defaultVariants = DEFAULT_WELCOME_VARIANTS.slice();
+    }
+
+    defaultVariants.forEach((v, idx) => {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = `variant-tab-pill ${idx === currentDefaultVariantIndex ? 'active' : ''}`;
+      pill.textContent = `Variant ${idx + 1}`;
+      pill.addEventListener('click', (e) => {
+        e.preventDefault();
+        defaultVariants[currentDefaultVariantIndex] = templateInput.value;
+        currentDefaultVariantIndex = idx;
+        renderDefaultVariantTabs();
+      });
+      defaultVariantTabs.appendChild(pill);
+    });
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'variant-tab-add';
+    addBtn.textContent = '+ Add Variant';
+    addBtn.title = 'Add another whole-message variation';
+    addBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      defaultVariants[currentDefaultVariantIndex] = templateInput.value;
+      const suggestions = generateContextPreservingVariants(templateInput.value);
+      const newVar = suggestions[defaultVariants.length % suggestions.length] || "Hi {firstName}, thanks for connecting! Looking forward to staying in touch.";
+      defaultVariants.push(newVar);
+      currentDefaultVariantIndex = defaultVariants.length - 1;
+      renderDefaultVariantTabs();
+      showToast(`Added Variant ${defaultVariants.length}`);
+    });
+    defaultVariantTabs.appendChild(addBtn);
+
+    templateInput.value = defaultVariants[currentDefaultVariantIndex] || '';
+    if (btnDeleteActiveVariant) {
+      btnDeleteActiveVariant.style.display = defaultVariants.length > 1 ? 'inline-block' : 'none';
+    }
+    updatePreview();
+  }
+
   function updatePreview() {
-    if (!templateInput || !templatePreview) return;
-    const raw = templateInput.value || '';
-    // Show first variant if ---OR--- exists
-    const firstVariant = raw.split(/(?:\r?\n\s*---OR---\s*\r?\n|\r?\n\s*===VARIANT===\s*\r?\n)/i)[0];
-    const sample = firstVariant
+    if (!templatePreview) return;
+    if (templateInput) {
+      defaultVariants[currentDefaultVariantIndex] = templateInput.value;
+    }
+    const targetVariant = defaultVariants[previewVariantIndex % Math.max(1, defaultVariants.length)] || templateInput?.value || '';
+    const sample = targetVariant
       .replace(/\{firstName\}/gi, 'Sarah')
       .replace(/\{fullName\}/gi, 'Sarah Jenkins')
       .replace(/\{company\}/gi, 'Compass Realty')
@@ -143,8 +243,9 @@ function initPopup() {
             </div>
           </div>
           <textarea class="rule-template-input" rows="4" placeholder="Message template for this rule">${escapeHtml(rule.template || '')}</textarea>
-          <div style="font-size: 10.5px; color: #64748b; margin-top: 2px;">
-            💡 Tip: Separate full alternative messages with <code>---OR---</code> or use <code>{phrase 1|phrase 2}</code>!
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <span style="font-size: 10.5px; color: #64748b;">Separate variants with <code>---OR---</code></span>
+            <button type="button" class="rule-gen-btn btn-generate-variants" style="padding: 2px 6px; font-size: 10px;">✨ Auto-Add Variants</button>
           </div>
         </div>
       `;
@@ -165,6 +266,22 @@ function initPopup() {
           textarea.value = textarea.value.substring(0, start) + tag + textarea.value.substring(end);
           textarea.focus();
           textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+        }
+      });
+    });
+
+    // Wire up rule auto-generate variants
+    popupRulesContainer.querySelectorAll('.rule-gen-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const card = btn.closest('.rule-card');
+        const textarea = card?.querySelector('.rule-template-input');
+        const kwInput = card?.querySelector('.rule-keywords-input');
+        if (textarea) {
+          const isRealtor = /realtor|real estate|broker/i.test((kwInput?.value || '') + ' ' + (textarea.value || ''));
+          const variants = isRealtor ? DEFAULT_REALTOR_VARIANTS : generateContextPreservingVariants(textarea.value);
+          textarea.value = variants.join('\n\n---OR---\n\n');
+          showToast('✨ Added safe whole-message variants!');
         }
       });
     });
@@ -296,15 +413,69 @@ function initPopup() {
     });
   }
 
+  // Auto-Generate Variations button
+  if (btnAutoGenVariants) {
+    btnAutoGenVariants.addEventListener('click', (e) => {
+      e.preventDefault();
+      const base = (templateInput?.value || '').trim() || defaultVariants[0] || '';
+      defaultVariants = generateContextPreservingVariants(base);
+      currentDefaultVariantIndex = 0;
+      renderDefaultVariantTabs();
+      showToast('✨ 4 Safe Whole-Message Variations Ready!');
+    });
+  }
+
+  // Delete Active Variant button
+  if (btnDeleteActiveVariant) {
+    btnDeleteActiveVariant.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (defaultVariants.length <= 1) {
+        showToast('At least one variation required');
+        return;
+      }
+      defaultVariants.splice(currentDefaultVariantIndex, 1);
+      currentDefaultVariantIndex = Math.max(0, currentDefaultVariantIndex - 1);
+      renderDefaultVariantTabs();
+      showToast('Variation removed');
+    });
+  }
+
+  // Shuffle Preview button
+  if (btnShufflePreview) {
+    btnShufflePreview.addEventListener('click', (e) => {
+      e.preventDefault();
+      previewVariantIndex = (previewVariantIndex + 1) % Math.max(1, defaultVariants.length);
+      updatePreview();
+      showToast(`Previewing Variant ${previewVariantIndex + 1}/${defaultVariants.length}`);
+    });
+  }
+
+  // Quick Clear Sent History button
+  if (btnClearHistoryQuick) {
+    btnClearHistoryQuick.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!confirm("Clear your sent message history?\n\nThis will allow the extension to send welcome messages to previously messaged/skipped connections.")) {
+        return;
+      }
+      try {
+        await chrome.storage.local.set({ sentHistory: [] });
+        showToast("Sent history cleared! Connections can now be messaged again.");
+        await syncStateFromStorage();
+      } catch (err) {
+        console.error('Failed to clear history:', err);
+      }
+    });
+  }
+
   // Save Template button
   if (btnSaveTemplate) {
     btnSaveTemplate.addEventListener('click', async (e) => {
       e.preventDefault();
-      const template = templateInput.value.trim();
-      if (!template) {
-        showToast('Default template cannot be empty');
-        return;
+      if (templateInput) {
+        defaultVariants[currentDefaultVariantIndex] = templateInput.value.trim();
       }
+      const cleaned = defaultVariants.map(v => v.trim()).filter(Boolean);
+      const template = cleaned.length > 0 ? cleaned.join('\n\n---OR---\n\n') : DEFAULT_SETTINGS.template;
       const rules = collectRulesFromDom();
 
       // Validate rules
@@ -325,7 +496,7 @@ function initPopup() {
         const updated = { ...DEFAULT_SETTINGS, ...settings, template, rules };
         await chrome.storage.local.set({ settings: updated });
         currentRules = rules;
-        showToast('Templates & rules saved!');
+        showToast('All message variations & rules saved!');
       } catch (err) {
         showToast('Error saving templates');
       }
@@ -337,14 +508,25 @@ function initPopup() {
     btnResetToday.addEventListener('click', async (e) => {
       e.preventDefault();
       try {
-        await chrome.runtime.sendMessage({ action: 'RESET_TODAY_COUNT' });
-        showToast("Today's count reset to 0!");
-        await syncStateFromStorage();
+        const today = getTodayString();
+        const data = await chrome.storage.local.get(['stats', 'settings']);
+        const stats = { ...(data.stats || {}), todayCount: 0, lastResetDate: today };
+        await chrome.storage.local.set({ stats });
+
+        // Immediate UI update
+        const limit = Number(data.settings?.dailyLimit) || 15;
+        const isUnlimited = isNaN(limit) || limit <= 0;
+        if (quotaBadge) quotaBadge.textContent = isUnlimited ? 'Today: 0 (Unlimited)' : `Today: 0 / ${limit}`;
+        if (quotaProgressFill) quotaProgressFill.style.width = '0%';
+        if (statusText) statusText.textContent = 'Ready';
+
+        try { chrome.action.setBadgeText({ text: '' }); } catch (e) {}
+        try { chrome.runtime.sendMessage({ action: 'RESET_TODAY_COUNT' }); } catch (e) {}
+
+        showToast("Today's message count reset to 0!");
       } catch (err) {
-        const { stats = {} } = await chrome.storage.local.get('stats');
-        await chrome.storage.local.set({ stats: { ...stats, todayCount: 0 } });
-        showToast("Today's count reset to 0!");
-        await syncStateFromStorage();
+        console.error('Failed to reset count:', err);
+        showToast("Failed to reset count");
       }
     });
   }
@@ -556,10 +738,14 @@ function initPopup() {
         quotaProgressFill.style.width = `${pct}%`;
       }
 
-      // Template & Inputs
-      if (templateInput && document.activeElement !== templateInput) {
-        templateInput.value = settings.template || DEFAULT_SETTINGS.template;
-        updatePreview();
+      // Template & Variants rendering
+      const isEditingTemplate = templateInput && document.activeElement === templateInput;
+      if (!isEditingTemplate) {
+        defaultVariants = parseVariants(settings.template || DEFAULT_SETTINGS.template);
+        if (currentDefaultVariantIndex >= defaultVariants.length) {
+          currentDefaultVariantIndex = 0;
+        }
+        renderDefaultVariantTabs();
       }
 
       // Rules rendering

@@ -42,7 +42,8 @@
         </div>
         <div style="display: flex; align-items: center; gap: 6px;">
           <div class="quota-badge" id="quota-badge">Today: 0 / 15</div>
-          <button id="btn-reset-today" class="reset-today-btn" title="Reset Today's message count to 0">↺</button>
+          <button id="btn-reset-today" class="reset-today-btn" title="Reset Today's message counter to 0">↺ Reset</button>
+          <button id="btn-clear-history-quick" class="reset-today-btn" style="color: #dc2626; border-color: #fecaca; background: #fef2f2;" title="Clear Sent History so you can re-message connections">🗑️ Clear</button>
         </div>
       </div>
       <div class="progress-bar-bg">
@@ -97,8 +98,8 @@
       <div class="form-group">
         <div class="form-header">
           <div>
-            <label for="template-input">Default Message</label>
-            <div style="font-size: 11px; color: #64748b;">Sent if no keyword rules match</div>
+            <label>Default Message Variations</label>
+            <div style="font-size: 11px; color: #64748b;">Randomly rotates safe whole-message scripts per contact</div>
           </div>
           <div class="variable-tags" style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;">
             <button type="button" class="tag-btn" data-insert="{firstName}">+ {firstName}</button>
@@ -109,14 +110,25 @@
             <button type="button" class="tag-btn" data-insert="{headline}">+ {headline}</button>
           </div>
         </div>
-        <textarea id="template-input" rows="4" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
-        <div style="font-size: 11px; color: #64748b; line-height: 1.4; margin-top: 2px;">
-          💡 <strong>Spintax:</strong> Use <code>{Hi|Hello|Hey}</code> for word variations, or separate entire messages with <code>---OR---</code> to randomly rotate complete templates!
+
+        <!-- Variant Tabs Bar -->
+        <div class="variant-tabs-bar" id="default-variant-tabs">
+          <!-- Dynamically populated: [Variant 1] [Variant 2] ... [+ Add Variant] -->
+        </div>
+
+        <textarea id="template-input" rows="4" placeholder="Enter message variation..."></textarea>
+        
+        <div class="variant-actions-bar">
+          <button type="button" id="btn-auto-gen-variants" class="btn-generate-variants" title="Generate 3 safe whole-message alternatives preserving this exact context">✨ Auto-Generate Safe Variations</button>
+          <button type="button" id="btn-delete-active-variant" class="btn-delete-active-variant" title="Delete this variation">✕ Delete Variant</button>
         </div>
       </div>
 
       <div class="preview-box">
-        <span class="preview-label">Default Live Preview:</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <span class="preview-label">Live Sample Preview:</span>
+          <button type="button" id="btn-shuffle-preview" style="background: none; border: none; color: #0a66c2; font-size: 11px; cursor: pointer; font-weight: 500;">🎲 Shuffle Variant</button>
+        </div>
         <p id="template-preview" class="preview-content">Hi Sarah, thanks for connecting! Looking forward to staying in touch.</p>
       </div>
 

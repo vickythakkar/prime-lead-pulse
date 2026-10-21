@@ -75,7 +75,10 @@
           <div class="stat-card">
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <span class="stat-label">Sent Today</span>
-              <button id="btn-dash-reset-today" class="btn btn-outline small" style="padding: 2px 8px; font-size: 11px; cursor: pointer;" title="Reset today's message counter to 0">↺ Reset Count</button>
+              <div style="display: flex; gap: 4px;">
+                <button id="btn-dash-reset-today" class="btn btn-outline small" style="padding: 2px 8px; font-size: 11px; cursor: pointer;" title="Reset today's message counter to 0">↺ Reset Count</button>
+                <button id="btn-dash-clear-history-quick" class="btn btn-outline small" style="padding: 2px 8px; font-size: 11px; cursor: pointer; color: #dc2626; border-color: #fecaca;" title="Clear sent history so you can re-message connections">🗑️ Clear History</button>
+              </div>
             </div>
             <div class="stat-val" id="stat-today">0</div>
             <span class="stat-sub" id="stat-today-sub">Daily limit: 15</span>
@@ -148,8 +151,8 @@
         <div class="card">
           <div class="card-header">
             <div>
-              <h3>Default Welcome Message (Fallback)</h3>
-              <p class="card-desc">Sent to new connections who do not match any of the targeted keyword rules above.</p>
+              <h3>Default Welcome Message Variations</h3>
+              <p class="card-desc">Randomly rotates whole-message scripts per contact. Safe, human-written variations that preserve the exact same context.</p>
             </div>
             <div class="tags-group" style="display: flex; flex-wrap: wrap; gap: 4px;">
               <button class="tag-pill" data-insert="{firstName}">+ {firstName}</button>
@@ -161,10 +164,23 @@
             </div>
           </div>
           <div class="form-body">
-            <textarea id="dash-template-input" rows="4" class="code-textarea" placeholder="Hi {firstName}, thanks for connecting! Looking forward to staying in touch."></textarea>
+            <!-- Variant Tabs Bar -->
+            <div class="variant-tabs-bar" id="dash-default-variant-tabs">
+              <!-- Dynamically populated -->
+            </div>
+
+            <textarea id="dash-template-input" rows="4" class="code-textarea" placeholder="Enter message variation..."></textarea>
             
+            <div class="variant-actions-bar">
+              <button type="button" id="btn-dash-auto-gen-variants" class="btn-generate-variants" title="Generate 3 safe whole-message alternatives preserving this exact context">✨ Auto-Generate 3 Context-Preserving Variations</button>
+              <button type="button" id="btn-dash-delete-active-variant" class="btn-delete-active-variant" title="Delete this variation">✕ Delete Variant</button>
+            </div>
+
             <div class="preview-panel">
-              <h4>Default Sample Preview:</h4>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <h4>Sample Preview:</h4>
+                <button type="button" id="btn-dash-shuffle-preview" style="background: none; border: none; color: #0a66c2; font-size: 12px; cursor: pointer; font-weight: 600;">🎲 Shuffle Variant</button>
+              </div>
               <p id="dash-template-preview" class="preview-text">Hi Sarah, thanks for connecting! Looking forward to staying in touch.</p>
             </div>
 

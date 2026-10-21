@@ -610,3 +610,92 @@ input:checked + .slider:before {
   border: 1px solid #cbd5e1;
 }
 
+/* Whole-Message Variant Tabs & Actions */
+.variant-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.variant-tab-pill {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.variant-tab-pill:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.variant-tab-pill.active {
+  background: #0a66c2;
+  color: #ffffff;
+  border-color: #0a66c2;
+}
+
+.variant-tab-add {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px dashed #94a3b8;
+  background: transparent;
+  color: #0a66c2;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.variant-tab-add:hover {
+  background: #f0f7ff;
+  border-color: #0a66c2;
+}
+
+.variant-actions-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  gap: 12px;
+}
+
+.btn-generate-variants {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-generate-variants:hover {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.btn-delete-active-variant {
+  background: transparent;
+  border: none;
+  color: #dc2626;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.btn-delete-active-variant:hover {
+  text-decoration: underline;
+}
+
