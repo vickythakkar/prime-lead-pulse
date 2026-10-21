@@ -1316,6 +1316,66 @@ function formatAgeDays(days) {
   return `${days} day(s) ago`;
 }
 
+// Dedicated multi-strategy scroller for LinkedIn's Sent Invitations list
+async function triggerInvitationsInfiniteScroll(cards = []) {
+  // 1. Scroll the very last card and its withdraw button into view (forces browser to scroll container & triggers IntersectionObserver)
+  if (cards.length > 0) {
+    const last = cards[cards.length - 1];
+    if (last && last.cardElement) {
+      try {
+        last.cardElement.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      } catch (e) {}
+    }
+    if (last && last.withdrawButton) {
+      try {
+        last.withdrawButton.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      } catch (e) {}
+    }
+  }
+
+  // 2. Scroll window and document
+  try {
+    window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight;
+    }
+  } catch (e) {}
+
+  // 3. Scroll all candidate scrollable containers in LinkedIn's layout
+  const scrollContainers = Array.from(document.querySelectorAll(
+    'main, .scaffold-layout__main, .scaffold-layout__content, .scaffold-layout__list, .scaffold-finite-scroll, .mn-invitation-manager, .artdeco-list, ul, div[tabindex="-1"]'
+  ));
+  for (const c of scrollContainers) {
+    try {
+      if (c.scrollHeight > c.clientHeight) {
+        c.scrollTop = c.scrollHeight;
+      }
+    } catch (e) {}
+  }
+
+  // 4. Click any "Show more results", "Load more" or "See more" buttons if LinkedIn has one at the bottom
+  const buttons = Array.from(document.querySelectorAll('button, a.artdeco-button'));
+  for (const b of buttons) {
+    if (b.closest('#law-floating-hud')) continue;
+    const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+    if (txt === 'show more results' || txt === 'show more' || txt === 'load more' || txt === 'see more') {
+      try { b.click(); } catch (e) {}
+    }
+  }
+
+  // 5. Small bounce to nudge LinkedIn's infinite scroll listener
+  await sleep(600);
+  try { window.scrollBy({ top: -150, behavior: 'smooth' }); } catch (e) {}
+  await sleep(400);
+  try { window.scrollBy({ top: 300, behavior: 'smooth' }); } catch (e) {}
+
+  // 6. Dispatch scroll events
+  try {
+    window.dispatchEvent(new Event('scroll'));
+    document.dispatchEvent(new Event('scroll'));
+  } catch (e) {}
+}
+
 // Auto-Withdraw Sent Invitations (supports configurable cutoff: e.g. 14 days, 30 days, 60 days, 180 days, or 0 = all)
 async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
   if (isRunning) return;
@@ -1445,7 +1505,7 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
           `Auto-scrolling to invites ${ageLabel}... (${totalCardsSeen} scanned, oldest: ${oldestDisplay})`,
           `Scan #${totalScrollCount}`
         );
-        window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
+        await triggerInvitationsInfiniteScroll(currentCards);
         await sleep(1800);
       } else {
         stuckScrolls = 0;
