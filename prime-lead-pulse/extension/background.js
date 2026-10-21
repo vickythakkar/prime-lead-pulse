@@ -279,35 +279,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         let cached = (senderEmail && data[`cached_emails_${senderEmail.toLowerCase()}`]) ||
                      (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
         
-        if (cached && cached.length > 0) {
-          sendResponse({ success: true, data: { emails: cached } });
-          return;
-        }
-
-        // Fetch fresh from server if cache was empty
+        // Always query server for fresh emails to ensure newly sent & replied emails are up-to-date
         const activeApiUrl = apiUrl || DEFAULT_API_URL;
         const base = activeApiUrl.replace(/\/$/, '');
         const queryUrl = senderEmail 
-          ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&t=${Date.now()}`
-          : `${base}/api/emails?t=${Date.now()}`;
+          ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=100&t=${Date.now()}`
+          : `${base}/api/emails?limit=100&t=${Date.now()}`;
         
         const headers = {};
         if (session && session.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
 
-        const res = session 
-          ? await fetchWithAuth(queryUrl, { cache: "no-store", headers }, session, activeApiUrl, senderEmail)
-          : await fetch(queryUrl, { cache: "no-store", headers });
+        try {
+          const res = session 
+            ? await fetchWithAuth(queryUrl, { cache: "no-store", headers }, session, activeApiUrl, senderEmail)
+            : await fetch(queryUrl, { cache: "no-store", headers });
 
-        if (res.ok) {
-          const resData = await res.json();
-          cached = resData.emails || [];
-          if (senderEmail) {
-            await chrome.storage.local.set({ [`cached_emails_${senderEmail.toLowerCase()}`]: cached });
+          if (res.ok) {
+            const resData = await res.json();
+            const freshEmails = resData.emails || [];
+            if (freshEmails.length > 0) {
+              cached = freshEmails;
+              const cacheUpdates = {};
+              if (senderEmail) cacheUpdates[`cached_emails_${senderEmail.toLowerCase()}`] = freshEmails;
+              if (parentEmail) cacheUpdates[`cached_emails_${parentEmail.toLowerCase()}`] = freshEmails;
+              await chrome.storage.local.set(cacheUpdates);
+            }
           }
-          sendResponse({ success: true, data: { emails: cached } });
-        } else {
-          sendResponse({ success: true, data: { emails: cached || [] } });
+        } catch (fetchErr) {
+          console.warn('GET_STATS network fetch failed, using cache:', fetchErr);
         }
+
+        sendResponse({ success: true, data: { emails: cached || [] } });
       } catch (err) {
         sendResponse({ success: false, error: err.message });
       }

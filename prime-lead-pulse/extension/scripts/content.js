@@ -292,8 +292,8 @@ function findEmailForThread(subject, participantEmails, participantNames, sender
   });
 
   let candidates = recipMatches;
-  // In Sent view, if recipient extraction was ambiguous, fall back to subject matches
-  if (candidates.length === 0 && isSentView) {
+  // If recipient extraction was ambiguous or multi-party thread in Inbox/Sent, fall back to subject matches
+  if (candidates.length === 0 && subjectMatches.length > 0) {
     candidates = subjectMatches;
   }
 
@@ -417,9 +417,11 @@ function injectSentBadges() {
 
   emailRows.forEach(row => {
     try {
-      const subjectEl = row.querySelector('span[data-thread-id], span.bqe, .bog, .y6');
+      const subjectEl = row.querySelector('.bog') || row.querySelector('span.bqe') || row.querySelector('span[data-thread-id]');
       if (!subjectEl) return;
-      let subject = subjectEl.textContent.trim();
+      const clone = subjectEl.cloneNode(true);
+      clone.querySelectorAll('.y2').forEach(el => el.remove());
+      let subject = clone.textContent.trim();
 
       const senderCell = row.querySelector('.yW');
       const senderText = (senderCell ? senderCell.textContent : '').toLowerCase();
