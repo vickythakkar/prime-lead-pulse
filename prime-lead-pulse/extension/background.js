@@ -408,10 +408,10 @@ function triggerNotificationsForEvents(eventsWithEmail) {
       priority: 0
     });
 
-    // Automatically clear the notification after 5 seconds
+    // Automatically clear the notification after 8.5 seconds (7-10s length)
     setTimeout(() => {
       chrome.notifications.clear(notificationId);
-    }, 5000);
+    }, 8500);
   }
 }
 
@@ -554,32 +554,47 @@ async function handleIncomingRealtimeEvent(payload) {
   };
   triggerNotificationsForEvents([{ ev: payload, email: syntheticEmail }]);
 
-  // 3. Immediately update cached emails for badges in Gmail
-  const sender = (payload.sender_email || '').toLowerCase();
-  if (sender) {
-    const key = `cached_emails_${sender}`;
-    const storageData = await chrome.storage.local.get([key]);
-    const list = storageData[key] || [];
-    const idx = list.findIndex(e => e.id === payload.email_id);
-    if (idx !== -1) {
-      const email = { ...list[idx] };
-      email.tracking_events = email.tracking_events || [];
-      if (!email.tracking_events.some(e => e.id === payload.id)) {
-        email.tracking_events.unshift({
-          id: payload.id,
-          event_type: payload.event_type,
-          url: payload.url,
-          created_at: payload.created_at
-        });
-        if (payload.event_type === 'open') email.opens = (email.opens || 0) + 1;
-        if (payload.event_type === 'click') email.clicks = (email.clicks || 0) + 1;
-        list[idx] = email;
-        await chrome.storage.local.set({ [key]: list });
+  // 3. Immediately update across ALL cached_emails_* lists in storage
+  const allStorage = await chrome.storage.local.get(null);
+  const updates = {};
+  for (const [k, list] of Object.entries(allStorage)) {
+    if (k.startsWith('cached_emails_') && Array.isArray(list)) {
+      const idx = list.findIndex(e => e.id === payload.email_id);
+      if (idx !== -1) {
+        const updatedList = [...list];
+        const email = { ...updatedList[idx] };
+        email.tracking_events = email.tracking_events || [];
+        if (!email.tracking_events.some(e => e.id === payload.id)) {
+          email.tracking_events.unshift({
+            id: payload.id,
+            event_type: payload.event_type,
+            url: payload.url,
+            created_at: payload.created_at
+          });
+          if (payload.event_type === 'open') email.opens = (email.opens || 0) + 1;
+          if (payload.event_type === 'click') email.clicks = (email.clicks || 0) + 1;
+          updatedList[idx] = email;
+          updates[k] = updatedList;
+        }
       }
     }
   }
+  if (Object.keys(updates).length > 0) {
+    await chrome.storage.local.set(updates);
+  }
 
-  // 4. Gently poll in the background to ensure entire mailbox stays 100% in sync
+  // 4. Directly notify all open Gmail tabs so the DOM badge flips in real-time
+  try {
+    chrome.tabs.query({}, (tabs) => {
+      (tabs || []).forEach(t => {
+        if (t.id) {
+          chrome.tabs.sendMessage(t.id, { action: 'REALTIME_EVENT', payload }).catch(() => {});
+        }
+      });
+    });
+  } catch (err) {}
+
+  // 5. Gently poll in the background to ensure entire mailbox stays 100% in sync
   pollForNotifications();
 }
 

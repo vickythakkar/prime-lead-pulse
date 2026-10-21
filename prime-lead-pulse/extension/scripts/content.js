@@ -977,6 +977,32 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
   }
 });
 
+// Listen for instant Realtime WebSocket events from background service worker
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.action === 'REALTIME_EVENT' && request.payload) {
+    const p = request.payload;
+    const target = emailCache.find(e => e.id === p.email_id);
+    if (target) {
+      target.tracking_events = target.tracking_events || [];
+      if (!target.tracking_events.some(ev => ev.id === p.id)) {
+        target.tracking_events.unshift(p);
+        if (p.event_type === 'open') target.opens = (target.opens || 0) + 1;
+        if (p.event_type === 'click') target.clicks = (target.clicks || 0) + 1;
+        if (target.clicks > 0) target.status = 'Clicked';
+        else if (target.opens > 0) target.status = 'Opened';
+      }
+      injectSentBadges();
+      injectEmailViewFeatures();
+    } else {
+      // If not currently in local memory, re-fetch fresh stats
+      fetchEmailStats().then(() => {
+        injectSentBadges();
+        injectEmailViewFeatures();
+      });
+    }
+  }
+});
+
 // Initial load and persistent background polling trigger
 function triggerPoll() {
   chrome.runtime.sendMessage({ action: 'FORCE_POLL' });

@@ -198,11 +198,6 @@ export async function GET(request: Request) {
       .order('created_at', { ascending: false })
       .limit(limit);
 
-    // If filtering by a specific sender (for the Gmail extension)
-    if (senderEmail && senderEmail !== 'unknown') {
-      query = query.ilike('sender_email', senderEmail);
-    }
-
     const { data, error } = await query;
     if (error) throw error;
 
