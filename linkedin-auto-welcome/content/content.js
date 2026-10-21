@@ -1198,28 +1198,34 @@ async function runAutoWelcomeSequence() {
 // --- ROBUST SENT INVITATIONS DISCOVERY & ACTIONS ---
 function getSentInvitationCards() {
   const cards = [];
-  const seenElements = new Set();
+  const seenButtons = new Set();
+  const seenCards = new Set();
 
-  // Find all elements that represent a "Withdraw" action (buttons, links, or text spans)
-  const candidateElements = Array.from(document.querySelectorAll('button, a.artdeco-button, [role="button"], button[aria-label*="Withdraw"], .invitation-card__action-btn'));
+  // Find all elements containing the text "Withdraw" (case-insensitive)
+  const candidateElements = Array.from(document.querySelectorAll('button, a, [role="button"], span, div.invitation-card__action-container'));
 
-  const withdrawButtons = [];
   for (const el of candidateElements) {
     if (el.closest('#law-floating-hud, header, #global-nav, .global-nav, .artdeco-modal, [role="dialog"]')) continue;
-    const t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim().toLowerCase();
-    if (t === 'withdraw' || t.includes('withdraw invitation') || t.includes('withdraw')) {
-      const btn = el.tagName === 'BUTTON' || el.tagName === 'A' ? el : (el.closest('button, a') || el);
-      if (btn && !withdrawButtons.includes(btn)) {
-        withdrawButtons.push(btn);
-      }
-    }
-  }
 
-  for (const btn of withdrawButtons) {
-    let card = btn.closest('li') || btn.closest('.invitation-card') || btn.closest('.artdeco-list__item') || btn.closest('[data-view-name]');
+    const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+    const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+
+    const isWithdraw = text === 'withdraw' || aria === 'withdraw' || aria.includes('withdraw invitation') || text.includes('withdraw invitation');
+    if (!isWithdraw) continue;
+
+    // Filter out top-level parent wrappers that happen to contain the word
+    if (el.children.length > 2) continue;
+
+    // Find the interactive button/link
+    const btn = el.closest('button, a, [role="button"]') || el;
+    if (seenButtons.has(btn)) continue;
+    seenButtons.add(btn);
+
+    // Find card container
+    let card = btn.closest('li, .invitation-card, .artdeco-list__item, [data-view-name*="invitation"], [data-chameleon-item], .mn-invitation-card');
     if (!card) {
       let curr = btn.parentElement;
-      for (let i = 0; i < 6 && curr && curr !== document.body; i++) {
+      for (let i = 0; i < 8 && curr && curr !== document.body; i++) {
         if (curr.querySelector('a[href*="/in/"]') || curr.querySelector('time') || curr.querySelector('h3, strong')) {
           card = curr;
           break;
@@ -1228,12 +1234,12 @@ function getSentInvitationCards() {
       }
     }
     if (!card) card = btn.parentElement?.parentElement || btn.parentElement;
-    if (!card || seenElements.has(card)) continue;
-    seenElements.add(card);
+    if (!card || seenCards.has(card)) continue;
+    seenCards.add(card);
 
     // Recipient Name
-    const nameEl = card.querySelector('.invitation-card__title, a[href*="/in/"], h3, strong, [aria-hidden="true"]');
-    const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : 'Member';
+    const nameEl = card.querySelector('.invitation-card__title, a[href*="/in/"], h3, strong, [aria-hidden="true"], [class*="title"], [class*="name"]');
+    const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim().split('\n')[0] : 'Member';
 
     // Age in days
     const ageDays = getInvitationAgeDays(card);
@@ -1342,22 +1348,23 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
     return;
   }
 
-  // 2. Ensure "Sent" tab is active on the page
-  updateHud('Checking Sent invitations tab...');
-  await sleep(600);
-  const sentTabLink = Array.from(document.querySelectorAll('a, button, [role="tab"]')).find(el => {
-    const href = el.getAttribute('href') || '';
-    const text = (el.innerText || el.textContent || '').trim().toLowerCase();
-    return (href.includes('/invitation-manager/sent') || text === 'sent' || text.startsWith('sent ('));
-  });
-  if (sentTabLink && sentTabLink.getAttribute('aria-selected') !== 'true' && !sentTabLink.classList.contains('active')) {
+  // 2. Ensure "Sent" tab is active on the page (only if not already on /sent)
+  if (!window.location.href.includes('/sent')) {
     updateHud('Opening Sent invitations tab...');
-    sentTabLink.click();
-    await sleep(2000);
+    await sleep(600);
+    const sentTabLink = Array.from(document.querySelectorAll('a, button, [role="tab"]')).find(el => {
+      const href = el.getAttribute('href') || '';
+      const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+      return (href.includes('/invitation-manager/sent') || text === 'sent' || text.startsWith('sent ('));
+    });
+    if (sentTabLink) {
+      sentTabLink.click();
+      await sleep(2000);
+    }
   }
 
   // 3. Wait for invitation cards to render from LinkedIn's API (up to 15 seconds)
-  updateHud('Waiting for sent invitations to load...');
+  updateHud('Waiting for sent invitations to load...', 'Checking DOM');
   let initialCards = [];
   for (let w = 0; w < 30; w++) {
     if (shouldStop) break;
@@ -1368,11 +1375,12 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
 
   let withdrawnCount = 0;
   let emptyScrolls = 0;
+  const maxScrolls = 12;
   let seenOldestDays = 0;
   let totalCardsSeen = initialCards.length;
 
   try {
-    while (!shouldStop && emptyScrolls < 4) {
+    while (!shouldStop && emptyScrolls < maxScrolls) {
       const currentCards = getSentInvitationCards();
       totalCardsSeen = Math.max(totalCardsSeen, currentCards.length);
 
@@ -1390,7 +1398,7 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
         if (isOld) {
           foundQualifying = true;
           const ageDisplay = item.ageDays !== null ? formatAgeDays(item.ageDays) : 'pending';
-          updateHud(`Withdrawing invite to ${item.name} (${ageDisplay})...`);
+          updateHud(`Withdrawing invite to ${item.name} (${ageDisplay})...`, `Withdrawn: ${withdrawnCount}`);
 
           item.withdrawButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
           await sleep(600);
@@ -1401,7 +1409,7 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
           for (let m = 0; m < 7; m++) {
             const modal = document.querySelector('.artdeco-modal, [role="dialog"], [data-test-modal-container]');
             if (modal) {
-              const modalBtns = Array.from(modal.querySelectorAll('button'));
+              const modalBtns = Array.from(modal.querySelectorAll('button, a, [role="button"]'));
               const confirmBtn = modalBtns.find(b => {
                 const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
                 return t === 'withdraw' || b.classList.contains('artdeco-button--primary') || b.getAttribute('data-test-dialog-primary-btn') !== null;
@@ -1416,16 +1424,20 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
           }
 
           withdrawnCount++;
-          updateHud(`Withdrawn ${withdrawnCount} invite(s)...`);
+          updateHud(`Withdrawn ${withdrawnCount} invite(s)...`, `Withdrawn: ${withdrawnCount}`);
           await sleep(1200);
         }
       }
 
       if (!foundQualifying) {
         emptyScrolls++;
-        updateHud(`Checking for older invitations (scroll check ${emptyScrolls}/4)...`);
+        const oldestDisplay = seenOldestDays > 0 ? formatAgeDays(seenOldestDays) : 'today';
+        updateHud(
+          `Scanning older invites ${ageLabel}... (${totalCardsSeen} visible, oldest: ${oldestDisplay})`,
+          `Scroll: ${emptyScrolls}/${maxScrolls}`
+        );
         window.scrollTo({ top: document.body.scrollHeight || document.documentElement.scrollHeight, behavior: 'smooth' });
-        await sleep(2500);
+        await sleep(2200);
       } else {
         emptyScrolls = 0;
         window.scrollBy({ top: 500, behavior: 'smooth' });
@@ -1439,15 +1451,14 @@ async function runWithdrawOldInvitesSequence(minAgeDays = 30) {
     } else if (withdrawnCount > 0) {
       msg = `Done! Successfully withdrawn ${withdrawnCount} invitations (${ageLabel}).`;
     } else if (totalCardsSeen > 0) {
-      const oldestText = seenOldestDays > 0 ? formatAgeDays(seenOldestDays) : 'recent';
-      const recommendFilter = seenOldestDays >= 30 ? '1 Month' : (seenOldestDays >= 14 ? '2 Weeks' : 'All Pending');
-      msg = `Found ${totalCardsSeen} pending invitations, but none are ${ageLabel} (oldest was sent ${oldestText}). To withdraw them, choose "${recommendFilter}" in the extension.`;
+      const oldestText = seenOldestDays > 0 ? formatAgeDays(seenOldestDays) : 'less than 1 day ago';
+      msg = `Found ${totalCardsSeen} pending invitations (oldest: ${oldestText}), but none are ${ageLabel}. To withdraw them, select "All Pending Invites" in the extension.`;
     } else {
       msg = 'No pending sent invitations found on this account.';
     }
 
     isRunning = false;
-    updateHud(msg);
+    updateHud(msg, `Withdrawn: ${withdrawnCount}`);
     try {
       await chrome.storage.local.set({
         runtimeState: {
