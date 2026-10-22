@@ -588,7 +588,7 @@ function showPanel(record, subject, to, sentDate, isHover = false) {
       <button class="plp-panel-close" id="plp-close-btn">✕</button>
     </div>
     <div class="plp-panel-meta">
-      <div>To: ${escapeHtml(to || record.recipient || '')}</div>
+      <div>To: ${escapeHtml((to || record.recipient || '').replace(/^To:\s*/i, '').trim())}</div>
       ${sentDate ? `<div>Sent: ${escapeHtml(sentDate)}</div>` : ''}
     </div>
     <div class="plp-panel-stats">
