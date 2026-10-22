@@ -221,6 +221,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Immediately update local caches so the email is known right away
         if (data?.email) {
+          if (data.email.user_id) {
+            subscribeToActiveUserChannels();
+          }
           const parentEmail = session?.user?.email || senderEmail;
           const targetAddresses = new Set();
           if (parentEmail) targetAddresses.add(parentEmail.toLowerCase());
@@ -592,16 +595,19 @@ async function subscribeToActiveUserChannels() {
   }
 
   for (const uid of userIds) {
-    if (!subscribedUserIds.has(uid)) {
-      subscribedUserIds.add(uid);
-      const joinMsg = {
-        topic: `realtime:user_${uid}`,
-        event: 'phx_join',
-        payload: { config: { broadcast: { self: false } } },
-        ref: String(++realtimeRefCounter)
-      };
-      realtimeWs.send(JSON.stringify(joinMsg));
-      console.log(`[PLP Realtime] Subscribed to realtime:user_${uid}`);
+    const topicsToJoin = [`realtime:user_${uid}`, `realtime:realtime:user_${uid}`];
+    for (const topic of topicsToJoin) {
+      if (!subscribedUserIds.has(topic)) {
+        subscribedUserIds.add(topic);
+        const joinMsg = {
+          topic,
+          event: 'phx_join',
+          payload: { config: { broadcast: { self: false } } },
+          ref: String(++realtimeRefCounter)
+        };
+        realtimeWs.send(JSON.stringify(joinMsg));
+        console.log(`[PLP Realtime] Subscribed to ${topic}`);
+      }
     }
   }
 }

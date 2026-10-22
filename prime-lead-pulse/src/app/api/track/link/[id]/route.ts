@@ -91,7 +91,7 @@ export async function GET(
         try {
           await Promise.race([
             new Promise((resolve) => {
-              const rtChan = supabase.channel(`realtime:user_${emailData.user_id}`);
+              const rtChan = supabase.channel(`user_${emailData.user_id}`);
               rtChan.subscribe(async (status) => {
                 if (status === 'SUBSCRIBED') {
                   await rtChan.send({
