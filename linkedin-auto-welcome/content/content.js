@@ -278,10 +278,22 @@ function getConnectionCards() {
     // Extract occupation / headline
     let headline = '';
     const occEl = card.querySelector(
-      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .artdeco-entity-lockup__caption, .mn-connection-card__details'
+      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
     );
     if (occEl) {
       headline = (occEl.innerText || occEl.textContent || '').trim();
+    }
+
+    // Extract location directly from card if present
+    let location = '';
+    const locEl = card.querySelector(
+      '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
+    );
+    if (locEl) {
+      const locText = (locEl.innerText || locEl.textContent || '').trim();
+      if (!locText.match(/connected|ago|mutual|shared/i)) {
+        location = locText;
+      }
     }
 
     // Clean name: take first line, separate joined lowercase-uppercase words (e.g. MyersRealtor -> Myers Realtor)
@@ -301,6 +313,7 @@ function getConnectionCards() {
       messageButton: messageBtn,
       name: name,
       headline: headline,
+      location: location,
       profileUrl: profileUrl
     });
   }
@@ -328,10 +341,21 @@ function getConnectionCards() {
 
       let headline = '';
       const occEl = card.querySelector(
-        '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .artdeco-entity-lockup__caption, .mn-connection-card__details'
+        '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
       );
       if (occEl) {
         headline = (occEl.innerText || occEl.textContent || '').trim();
+      }
+
+      let location = '';
+      const locEl = card.querySelector(
+        '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
+      );
+      if (locEl) {
+        const locText = (locEl.innerText || locEl.textContent || '').trim();
+        if (!locText.match(/connected|ago|mutual|shared/i)) {
+          location = locText;
+        }
       }
 
       seenUrls.add(profileUrl);
@@ -341,6 +365,7 @@ function getConnectionCards() {
         messageButton: btn,
         name: name || 'LinkedIn Member',
         headline: headline,
+        location: location,
         profileUrl: profileUrl
       });
     }
@@ -686,6 +711,96 @@ function extractCompany(headline) {
   return '';
 }
 
+// Profile location cache to avoid redundant network lookups
+const profileLocationCache = new Map();
+
+// Parse geographic location from LinkedIn Profile HTML (Schema.org, Ember SSR, or DOM)
+function parseLocationFromProfileHtml(html) {
+  if (!html) return '';
+
+  // 1. Schema.org JSON-LD (most reliable & clean across LinkedIn updates)
+  try {
+    const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let match;
+    while ((match = jsonLdRegex.exec(html)) !== null) {
+      try {
+        const data = JSON.parse(match[1]);
+        const person = data['@type'] === 'Person'
+          ? data
+          : (Array.isArray(data['@graph']) ? data['@graph'].find(x => x && x['@type'] === 'Person') : null);
+        if (person && person.address) {
+          const parts = [
+            person.address.addressLocality,
+            person.address.addressRegion,
+            person.address.addressCountry
+          ].filter(Boolean);
+          if (parts.length > 0) return parts.join(', ');
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  // 2. Embedded Ember SSR JSON code blocks
+  try {
+    const locMatch = html.match(/"defaultLocalizedName"\s*:\s*"([^"]+)"/i) 
+                  || html.match(/"locationName"\s*:\s*"([^"]+)"/i)
+                  || html.match(/"formattedLocation"\s*:\s*"([^"]+)"/i);
+    if (locMatch && locMatch[1]) {
+      return locMatch[1].trim();
+    }
+  } catch (e) {}
+
+  // 3. Fallback regex on HTML elements
+  try {
+    const spanMatch = html.match(/(?:class=["'][^"']*(?:text-body-small|t-black--light)[^"']*["'][^>]*>\s*)([A-Za-z0-9\s,.-]+(?:Emirates|Dubai|USA|Area|City|Kingdom|States|Canada|Australia|UK|County|Region|District)[A-Za-z0-9\s,.-]*)(?:\s*<\/span>)/i);
+    if (spanMatch && spanMatch[1]) {
+      return spanMatch[1].trim();
+    }
+  } catch (e) {}
+
+  return '';
+}
+
+// Fetch and cache location from LinkedIn profile page
+async function getOrFetchLocation(conn) {
+  if (conn.location && conn.location.length > 1) {
+    return conn.location;
+  }
+  if (!conn.profileUrl) return '';
+
+  if (profileLocationCache.has(conn.profileUrl)) {
+    const cached = profileLocationCache.get(conn.profileUrl);
+    if (cached) conn.location = cached;
+    return cached;
+  }
+
+  try {
+    const res = await fetch(conn.profileUrl, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml'
+      }
+    });
+
+    if (res.ok) {
+      const html = await res.text();
+      const loc = parseLocationFromProfileHtml(html);
+      if (loc) {
+        console.log(`[LAW] Detected profile location for ${conn.name}: "${loc}"`);
+        profileLocationCache.set(conn.profileUrl, loc);
+        conn.location = loc;
+        return loc;
+      }
+    }
+  } catch (err) {
+    console.warn('[LAW] Could not fetch profile location for', conn.name, err);
+  }
+
+  profileLocationCache.set(conn.profileUrl, '');
+  return '';
+}
+
 // Multi-Variant & Spintax Message Resolver
 function resolveMessageTemplate(rawTemplate, conn) {
   if (!rawTemplate) return '';
@@ -721,6 +836,7 @@ function resolveMessageTemplate(rawTemplate, conn) {
   const fullName = conn.name || '';
   const headline = conn.headline || '';
   const company = extractCompany(headline);
+  const location = conn.location || '';
 
   // Time of Day
   const hour = new Date().getHours();
@@ -735,6 +851,7 @@ function resolveMessageTemplate(rawTemplate, conn) {
     .replace(/\{fullName\}/gi, fullName)
     .replace(/\{headline\}/gi, headline)
     .replace(/\{company\}/gi, company || 'your firm')
+    .replace(/\{location\}/gi, location || 'your area')
     .replace(/\{timeOfDay\}/gi, timeOfDay)
     .replace(/\{dayOfWeek\}/gi, dayOfWeek);
 
@@ -788,10 +905,11 @@ async function triggerLinkedInInfiniteScroll() {
 function selectTemplate(conn, settings, convoContainer) {
   const rules = Array.isArray(settings.rules) ? settings.rules : [];
 
-  // Gather all available context for this person: card, headline, profile, chat header
+  // Gather all available context for this person: card, headline, location, profile, chat header
   const contextParts = [
     conn.name || '',
     conn.headline || '',
+    conn.location || '',
     conn.cardElement ? (conn.cardElement.innerText || conn.cardElement.textContent || '') : '',
     convoContainer ? (convoContainer.innerText || convoContainer.textContent || '') : ''
   ];
@@ -802,7 +920,7 @@ function selectTemplate(conn, settings, convoContainer) {
     const keywords = rule.keywords.split(',').map(k => k.trim()).filter(Boolean);
     for (const kw of keywords) {
       if (matchKeyword(searchableText, kw)) {
-        console.log(`[LAW] Matched rule "${rule.name}" via keyword "${kw}" for ${conn.name}`);
+        console.log(`[LAW] Matched rule "${rule.name}" via keyword "${kw}" for ${conn.name} (Location: ${conn.location || 'N/A'})`);
         return {
           template: rule.template,
           ruleName: rule.name || 'Keyword Rule',
@@ -1004,12 +1122,18 @@ async function runAutoWelcomeSequence() {
         }
       }
 
+      // Resolve location: from connection card or fetch from profile in background
+      if (!conn.location) {
+        conn.location = await getOrFetchLocation(conn);
+      }
+
       // Select template (keyword rule matching or default fallback) with Spintax & Full Message Variations
       const ruleResult = selectTemplate(conn, settings, activeConvo);
       const personalizedMessage = resolveMessageTemplate(ruleResult.template || settings.template, conn);
 
+      const locSuffix = conn.location ? ` [${conn.location}]` : '';
       if (ruleResult.ruleName !== 'Default') {
-        updateHud(`🎯 Matched "${ruleResult.ruleName}" (${ruleResult.matchedKeyword})! Typing message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
+        updateHud(`🎯 Matched "${ruleResult.ruleName}" (${ruleResult.matchedKeyword})${locSuffix}! Typing message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
       } else {
         updateHud(`Found chat! Typing default message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
       }
@@ -1084,6 +1208,9 @@ async function runAutoWelcomeSequence() {
             profileUrl: conn.profileUrl,
             name: conn.name,
             firstName: firstName,
+            headline: conn.headline,
+            location: conn.location || '',
+            company: extractCompany(conn.headline),
             message: personalizedMessage,
             ruleMatched: ruleResult.ruleName !== 'Default' ? `${ruleResult.ruleName} [${ruleResult.matchedKeyword}]` : 'Default',
             sentAt: new Date().toISOString(),
@@ -1110,6 +1237,7 @@ async function runAutoWelcomeSequence() {
                   name: conn.name,
                   firstName: firstName,
                   headline: conn.headline,
+                  location: conn.location || '',
                   company: extractCompany(conn.headline),
                   profileUrl: conn.profileUrl,
                   message: personalizedMessage,

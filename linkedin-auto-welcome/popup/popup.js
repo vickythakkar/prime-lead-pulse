@@ -235,6 +235,7 @@ function initPopup() {
       .replace(/\{firstName\}/gi, 'Sarah')
       .replace(/\{fullName\}/gi, 'Sarah Jenkins')
       .replace(/\{company\}/gi, 'Compass Realty')
+      .replace(/\{location\}/gi, 'Dubai, UAE')
       .replace(/\{timeOfDay\}/gi, 'Good morning')
       .replace(/\{dayOfWeek\}/gi, 'Wednesday')
       .replace(/\{headline\}/gi, 'Associate Broker');
@@ -267,14 +268,14 @@ function initPopup() {
 
       card.innerHTML = `
         <div class="rule-card-header">
-          <input type="text" class="rule-name-input" placeholder="Rule Name (e.g. US Realtors)" value="${escapeHtml(rule.name || '')}">
+          <input type="text" class="rule-name-input" placeholder="Rule Name (e.g. Dubai Investors, US Realtors)" value="${escapeHtml(rule.name || '')}">
           <button type="button" class="rule-delete-btn" title="Delete Rule" data-delete-idx="${idx}">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
           </button>
         </div>
         <div>
-          <div class="sub-label">Keywords (comma-separated):</div>
-          <input type="text" class="rule-keywords-input" placeholder="e.g. realtor, real estate, broker, USA" value="${escapeHtml(rule.keywords || '')}">
+          <div class="sub-label">Keywords (headline, bio, or location):</div>
+          <input type="text" class="rule-keywords-input" placeholder="e.g. dubai, uae, realtor, broker, USA" value="${escapeHtml(rule.keywords || '')}">
         </div>
         <div>
           <div class="form-header" style="margin-bottom: 4px;">
@@ -283,6 +284,7 @@ function initPopup() {
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{firstName}">+ {firstName}</button>
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{fullName}">+ {fullName}</button>
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{company}">+ {company}</button>
+              <button type="button" class="tag-btn rule-tag-btn" data-tag="{location}">+ {location}</button>
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{timeOfDay}">+ {timeOfDay}</button>
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{dayOfWeek}">+ {dayOfWeek}</button>
               <button type="button" class="tag-btn rule-tag-btn" data-tag="{headline}">+ {headline}</button>

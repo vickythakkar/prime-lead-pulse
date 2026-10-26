@@ -247,6 +247,7 @@ function initDashboard() {
       .replace(/\{firstName\}/gi, 'Sarah')
       .replace(/\{fullName\}/gi, 'Sarah Jenkins')
       .replace(/\{company\}/gi, 'Apex Realty')
+      .replace(/\{location\}/gi, 'Dubai, UAE')
       .replace(/\{timeOfDay\}/gi, 'afternoon')
       .replace(/\{dayOfWeek\}/gi, 'Wednesday')
       .replace(/\{headline\}/gi, 'Realtor at Apex Realty');
@@ -274,7 +275,7 @@ function initDashboard() {
     dashRulesContainer.innerHTML = '';
 
     if (!rules || rules.length === 0) {
-      dashRulesContainer.innerHTML = '<div class="empty-cell text-center" style="padding: 24px;">No keyword rules configured. Click "+ Add Keyword Rule" above to create targeted messages for realtors, executives, etc.</div>';
+      dashRulesContainer.innerHTML = '<div class="empty-cell text-center" style="padding: 24px;">No keyword rules configured. Click "+ Add Keyword Rule" above to create targeted messages for realtors, executives, Dubai investors, etc.</div>';
       return;
     }
 
@@ -285,15 +286,15 @@ function initDashboard() {
 
       card.innerHTML = `
         <div class="dash-rule-header">
-          <input type="text" class="dash-rule-name-input" placeholder="Rule Name (e.g. US Realtors & Real Estate)" value="${escapeHtml(rule.name || '')}">
+          <input type="text" class="dash-rule-name-input" placeholder="Rule Name (e.g. Dubai Investors, US Realtors)" value="${escapeHtml(rule.name || '')}">
           <button type="button" class="dash-rule-delete-btn" data-delete-idx="${idx}" title="Delete Rule">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
             Delete Rule
           </button>
         </div>
         <div>
-          <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Match Keywords (comma-separated, case-insensitive):</label>
-          <input type="text" class="dash-rule-keywords-input" placeholder="e.g. realtor, real estate, broker, realty, mortgage, USA" value="${escapeHtml(rule.keywords || '')}">
+          <label style="display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">Match Keywords (headline, bio, or location):</label>
+          <input type="text" class="dash-rule-keywords-input" placeholder="e.g. dubai, uae, realtor, broker, USA" value="${escapeHtml(rule.keywords || '')}">
         </div>
         <div>
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;">
@@ -302,6 +303,7 @@ function initDashboard() {
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{firstName}">+ {firstName}</button>
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{fullName}">+ {fullName}</button>
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{company}">+ {company}</button>
+              <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{location}">+ {location}</button>
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{timeOfDay}">+ {timeOfDay}</button>
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{dayOfWeek}">+ {dayOfWeek}</button>
               <button type="button" class="tag-pill dash-rule-tag-pill" data-tag="{headline}">+ {headline}</button>
