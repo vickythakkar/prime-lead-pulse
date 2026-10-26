@@ -44,6 +44,18 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Universal DOM click simulation triggering pointer, mouse, and click event chains
+function simulateClick(el) {
+  if (!el) return;
+  try { el.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (e) {}
+  try { el.focus(); } catch (e) {}
+  try { el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+  try { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, buttons: 1 })); } catch (e) {}
+  try { el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+  try { el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+  try { el.click(); } catch (e) {}
+}
+
 function getRandomDelay(minSeconds, maxSeconds) {
   const min = Math.max(10, Number(minSeconds) || 25);
   const max = Math.max(min + 2, Number(maxSeconds) || 45);
@@ -233,84 +245,105 @@ function getConnectionCards() {
   const cards = [];
   const seenUrls = new Set();
 
-  // Find all profile links on page (excluding top navbar, ads, and HUD)
-  const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
-    return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud');
+  // Find all Message buttons on page (excluding top navbar, ads, msg overlays, and HUD)
+  const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
+    return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #msg-overlay, aside.msg-overlay-container, #law-floating-hud') && isMessageButton(b);
   });
 
-  for (const link of allProfileLinks) {
-    const rawHref = link.getAttribute('href') || link.href || '';
-    const profileUrl = normalizeUrl(rawHref);
-
-    if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
-
-    // Walk up to find the row container (li, div.artdeco-list__item, or row element)
-    let card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
-
+  for (const btn of allButtons) {
+    // 1. Locate the parent connection card container
+    let card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.closest('[data-view-name*="connection"]') || btn.closest('[data-view-name*="profile"]');
     if (!card) {
-      let curr = link.parentElement;
+      let curr = btn.parentElement;
       for (let i = 0; i < 6 && curr && curr !== document.body; i++) {
-        if (curr.querySelector('button, a.artdeco-button')) {
+        if (curr.querySelector('a[href*="/in/"]')) {
           card = curr;
           break;
         }
         curr = curr.parentElement;
       }
     }
-
     if (!card) continue;
 
-    // Find the Message button inside this card
-    const buttons = Array.from(card.querySelectorAll('button, a'));
-    const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
+    // 2. Identify the PRIMARY profile link for THIS connection
+    // Strictly avoid mutual connection links (.member-insights, caption, details)
+    let link = card.querySelector(
+      '.artdeco-entity-lockup__title a[href*="/in/"], ' +
+      '.mn-connection-card__link[href*="/in/"], ' +
+      'a[data-control-name="connection_profile"], ' +
+      'a.mn-connection-card__picture[href*="/in/"]'
+    );
 
-    if (!messageBtn) continue;
+    if (!link) {
+      // Find all in-profile links inside this card, excluding mutual connection insight containers
+      const candidateLinks = Array.from(card.querySelectorAll('a[href*="/in/"]')).filter(a => {
+        return !a.closest('.member-insights, .artdeco-entity-lockup__caption, .mn-connection-card__details');
+      });
+      if (candidateLinks.length > 0) {
+        link = candidateLinks[0];
+      }
+    }
 
-    // Extract name
+    if (!link) continue;
+
+    const rawHref = link.getAttribute('href') || link.href || '';
+    const profileUrl = normalizeUrl(rawHref);
+    if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
+
+    // 3. Extract the person's REAL name from the title lockup
     let name = '';
-    const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], h3, strong');
-    if (nameEl) {
-      name = nameEl.innerText || nameEl.textContent || '';
+    const titleSpan = card.querySelector(
+      '.artdeco-entity-lockup__title span[aria-hidden="true"], ' +
+      '.mn-connection-card__name, ' +
+      '[data-anonymize="person-name"], ' +
+      '.artdeco-entity-lockup__title a'
+    );
+    if (titleSpan) {
+      name = titleSpan.innerText || titleSpan.textContent || '';
     } else {
       name = link.innerText || link.textContent || '';
     }
 
-    // Extract occupation / headline
+    // Clean name: remove "View ... profile", pronouns (She/Her), honorifics, etc.
+    name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
+    name = name.replace(/view\s+.*?profile/gi, '').trim();
+    name = name.replace(/\(.*?\)/g, '').trim();
+    name = name.replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+    const nameWords = name.split(' ').filter(w => w.length > 0 && !w.match(/^(dr|mr|mrs|ms|prof|pmp|mba|cpa|ca|1st|2nd|3rd)\.?$/i));
+    if (nameWords.length > 2) {
+      name = nameWords.slice(0, 2).join(' ');
+    } else if (nameWords.length > 0) {
+      name = nameWords.join(' ');
+    }
+
+    if (!name || name.length < 2) continue;
+
+    // 4. Extract occupation / headline
     let headline = '';
     const occEl = card.querySelector(
-      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
+      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, [data-anonymize="headline"]'
     );
     if (occEl) {
       headline = (occEl.innerText || occEl.textContent || '').trim();
     }
 
-    // Extract location directly from card if present
+    // 5. Extract location directly from card if present
     let location = '';
     const locEl = card.querySelector(
       '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
     );
     if (locEl) {
       const locText = (locEl.innerText || locEl.textContent || '').trim();
-      if (!locText.match(/connected|ago|mutual|shared/i)) {
+      if (!locText.match(/connected|ago|mutual|shared|insight/i)) {
         location = locText;
       }
     }
-
-    // Clean name: take first line, separate joined lowercase-uppercase words (e.g. MyersRealtor -> Myers Realtor)
-    name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
-    name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
-    const nameWords = name.split(' ').filter(w => w.length > 0);
-    if (nameWords.length > 2) {
-      // Keep only first 2 words for the clean name
-      name = nameWords.slice(0, 2).join(' ');
-    }
-    if (!name || name.length < 2) continue;
 
     seenUrls.add(profileUrl);
     cards.push({
       cardElement: card,
       linkElement: link,
-      messageButton: messageBtn,
+      messageButton: btn,
       name: name,
       headline: headline,
       location: location,
@@ -318,52 +351,57 @@ function getConnectionCards() {
     });
   }
 
-  // Backup Strategy: Search directly for Message buttons if profile links scan yielded 0
+  // Backup Strategy: If no message buttons found via button query, scan profile links
   if (cards.length === 0) {
-    const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
-      return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud') && isMessageButton(b);
+    const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
+      return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud, .member-insights');
     });
 
-    for (const btn of allButtons) {
-      const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.parentElement?.parentElement;
+    for (const link of allProfileLinks) {
+      const rawHref = link.getAttribute('href') || link.href || '';
+      const profileUrl = normalizeUrl(rawHref);
+      if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
+
+      let card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
       if (!card) continue;
 
-      const link = card.querySelector('a[href*="/in/"]');
-      if (!link) continue;
+      const buttons = Array.from(card.querySelectorAll('button, a'));
+      const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
+      if (!messageBtn) continue;
 
-      const profileUrl = normalizeUrl(link.getAttribute('href') || link.href);
-      if (!profileUrl || seenUrls.has(profileUrl)) continue;
-
-      let name = (link.innerText || link.textContent || '').trim().split('\n')[0].replace(/\s+/g, ' ').trim();
-      name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
-      const parts = name.split(' ').filter(w => w.length > 0);
-      if (parts.length > 2) name = parts.slice(0, 2).join(' ');
-
-      let headline = '';
-      const occEl = card.querySelector(
-        '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
-      );
-      if (occEl) {
-        headline = (occEl.innerText || occEl.textContent || '').trim();
+      let name = '';
+      const titleSpan = card.querySelector('.artdeco-entity-lockup__title span[aria-hidden="true"], .mn-connection-card__name');
+      if (titleSpan) {
+        name = titleSpan.innerText || titleSpan.textContent || '';
+      } else {
+        name = link.innerText || link.textContent || '';
       }
 
+      name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
+      name = name.replace(/\(.*?\)/g, '').trim();
+      name = name.replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+      const nameWords = name.split(' ').filter(w => w.length > 0 && !w.match(/^(dr|mr|mrs|ms|prof|pmp|mba|cpa|ca|1st|2nd|3rd)\.?$/i));
+      if (nameWords.length > 2) name = nameWords.slice(0, 2).join(' ');
+      else if (nameWords.length > 0) name = nameWords.join(' ');
+      if (!name || name.length < 2) continue;
+
+      let headline = '';
+      const occEl = card.querySelector('.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle');
+      if (occEl) headline = (occEl.innerText || occEl.textContent || '').trim();
+
       let location = '';
-      const locEl = card.querySelector(
-        '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
-      );
+      const locEl = card.querySelector('.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption');
       if (locEl) {
         const locText = (locEl.innerText || locEl.textContent || '').trim();
-        if (!locText.match(/connected|ago|mutual|shared/i)) {
-          location = locText;
-        }
+        if (!locText.match(/connected|ago|mutual|shared|insight/i)) location = locText;
       }
 
       seenUrls.add(profileUrl);
       cards.push({
         cardElement: card,
         linkElement: link,
-        messageButton: btn,
-        name: name || 'LinkedIn Member',
+        messageButton: messageBtn,
+        name: name,
         headline: headline,
         location: location,
         profileUrl: profileUrl
@@ -415,88 +453,192 @@ function querySelectorDeep(selector, root = document) {
 
 // Close all existing open chat / compose windows cleanly
 async function closeAllOpenChats() {
-  // 1. Identify all active conversation bubbles on screen
-  const bubbles = Array.from(document.querySelectorAll(
-    '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [data-view-name="msg-overlay-conversation-bubble"]'
-  ));
+  for (let pass = 0; pass < 2; pass++) {
+    // 1. Identify all conversation / compose overlay bubbles on screen
+    const bubbles = Array.from(document.querySelectorAll(
+      '.msg-overlay-conversation-bubble, [data-view-name="msg-overlay-conversation-bubble"], .msg-convo-wrapper, aside.msg-overlay-container > div'
+    )).filter(b => {
+      if (b.classList.contains('msg-overlay-list-bubble')) return false;
+      return b.offsetWidth > 0 || b.offsetHeight > 0;
+    });
 
-  for (const bubble of bubbles) {
-    // Locate the close button inside this specific bubble's header
-    const closeBtns = Array.from(bubble.querySelectorAll(
-      'button[data-control-name*="close"], ' +
-      'button[aria-label*="Close conversation" i], ' +
-      'button[aria-label*="Close" i], ' +
-      'button[aria-label*="Dismiss" i], ' +
-      '.msg-overlay-bubble-header__control--close, ' +
-      'button:has(svg[data-test-icon*="close" i]), ' +
-      'button:has(li-icon[type*="cancel" i])'
-    ));
+    for (const bubble of bubbles) {
+      let closeBtn = null;
 
-    // Fallback: The last button in the bubble header controls is always the "X" close button
-    if (closeBtns.length === 0) {
-      const headerBtns = Array.from(bubble.querySelectorAll('header.msg-overlay-bubble-header button, .msg-overlay-bubble-header button'));
-      if (headerBtns.length > 0) {
-        closeBtns.push(headerBtns[headerBtns.length - 1]);
+      // Check specific close button attributes
+      try {
+        closeBtn = bubble.querySelector(
+          'button[data-control-name*="close"], ' +
+          'button[data-control-name*="dismiss"], ' +
+          'button[aria-label*="Close" i], ' +
+          'button[aria-label*="Dismiss" i]'
+        );
+      } catch (e) {}
+
+      // Header controls last button (The top-right "X" button is always last)
+      if (!closeBtn) {
+        try {
+          const headerBtns = Array.from(bubble.querySelectorAll(
+            'header.msg-overlay-bubble-header button, .msg-overlay-bubble-header button, header button'
+          ));
+          if (headerBtns.length > 0) {
+            closeBtn = headerBtns[headerBtns.length - 1];
+          }
+        } catch (e) {}
+      }
+
+      // Check for button with close/cancel SVG icon
+      if (!closeBtn) {
+        try {
+          const svg = bubble.querySelector(
+            'svg[data-test-icon*="close"], svg[data-test-icon*="cancel"], li-icon[type*="cancel"]'
+          );
+          if (svg) closeBtn = svg.closest('button');
+        } catch (e) {}
+      }
+
+      if (closeBtn) {
+        simulateClick(closeBtn);
       }
     }
 
-    for (const btn of closeBtns) {
-      try { btn.click(); } catch (e) {}
-    }
-  }
+    // 2. Also close any collapsed chat pills or dock tabs at the bottom bar (e.g. "Homera Khan X")
+    try {
+      const pillCloseBtns = Array.from(document.querySelectorAll(
+        '.msg-overlay-list-bubble button[aria-label*="Close" i], ' +
+        '.msg-overlay-bubble-header button[aria-label*="Close" i], ' +
+        'button[data-control-name="overlay.close_conversation_window"]'
+      ));
+      for (const btn of pillCloseBtns) {
+        if (btn.closest('#law-floating-hud, #global-nav, .global-nav, nav')) continue;
+        simulateClick(btn);
+      }
+    } catch (e) {}
 
-  // 2. Also close any collapsed chat pills or dock tabs at the bottom bar (e.g. "Homera Khan X")
-  const pillCloseBtns = Array.from(document.querySelectorAll(
-    '.msg-overlay-list-bubble button[aria-label*="Close" i], ' +
-    '.msg-overlay-bubble-header button[aria-label*="Close" i], ' +
-    'button[data-control-name="overlay.close_conversation_window"]'
-  ));
-  for (const btn of pillCloseBtns) {
-    if (btn.closest('#law-floating-hud, #global-nav, .global-nav, nav')) continue;
-    try { btn.click(); } catch (e) {}
-  }
+    // 3. Confirm any "Discard draft?" modal prompts
+    await sleep(200);
+    try {
+      const discardBtns = Array.from(document.querySelectorAll('button, .artdeco-modal button')).filter(b => {
+        if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
+        const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+        return txt === 'discard' || txt === 'discard draft';
+      });
+      for (const b of discardBtns) {
+        simulateClick(b);
+      }
+    } catch (e) {}
 
-  // 3. Confirm any "Discard draft?" prompts
-  await sleep(250);
-  const discardBtns = Array.from(document.querySelectorAll('button')).filter(b => {
-    if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
-    const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
-    return txt === 'discard' || txt === 'discard draft';
-  });
-  for (const b of discardBtns) {
-    try { b.click(); } catch (e) {}
-  }
+    await sleep(200);
 
-  await sleep(350);
+    // Check if any open bubbles still exist
+    const remaining = Array.from(document.querySelectorAll(
+      '.msg-overlay-conversation-bubble, [data-view-name="msg-overlay-conversation-bubble"]'
+    )).filter(b => {
+      if (b.classList.contains('msg-overlay-conversation-bubble--minimized') ||
+          b.classList.contains('msg-overlay-list-bubble--is-minimized') ||
+          b.classList.contains('msg-overlay-list-bubble')) {
+        return false;
+      }
+      return b.offsetWidth > 100 && b.offsetHeight > 100;
+    });
+
+    if (remaining.length === 0) break;
+  }
 }
 
 // Close a specific conversation window
 async function closeConversationWindow(convoEl) {
   if (convoEl) {
-    const closeBtns = Array.from(convoEl.querySelectorAll(
-      'button[data-control-name*="close"], ' +
-      'button[aria-label*="Close conversation" i], ' +
-      'button[aria-label*="Close" i], ' +
-      'button[aria-label*="Dismiss" i], ' +
-      '.msg-overlay-bubble-header__control--close, ' +
-      'header.msg-overlay-bubble-header button:last-child, ' +
-      '.msg-overlay-bubble-header button:last-child'
-    ));
+    let closeBtn = null;
+    try {
+      closeBtn = convoEl.querySelector(
+        'button[data-control-name*="close"], ' +
+        'button[data-control-name*="dismiss"], ' +
+        'button[aria-label*="Close" i], ' +
+        'button[aria-label*="Dismiss" i]'
+      );
+    } catch (e) {}
 
-    for (const b of closeBtns) {
-      try { b.click(); } catch (e) {}
+    if (!closeBtn) {
+      try {
+        const headerBtns = Array.from(convoEl.querySelectorAll(
+          'header.msg-overlay-bubble-header button, .msg-overlay-bubble-header button, header button'
+        ));
+        if (headerBtns.length > 0) {
+          closeBtn = headerBtns[headerBtns.length - 1];
+        }
+      } catch (e) {}
     }
 
-    await sleep(250);
-    const discard = Array.from(document.querySelectorAll('button')).find(b => {
-      if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
-      const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
-      return txt === 'discard' || txt === 'discard draft';
-    });
-    if (discard) try { discard.click(); } catch (e) {}
+    if (closeBtn) {
+      simulateClick(closeBtn);
+    }
+
+    await sleep(200);
+    try {
+      const discard = Array.from(document.querySelectorAll('button, .artdeco-modal button')).find(b => {
+        if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
+        const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+        return txt === 'discard' || txt === 'discard draft';
+      });
+      if (discard) simulateClick(discard);
+    } catch (e) {}
   }
 
   await closeAllOpenChats();
+}
+
+// Strict Recipient Verifier across both "New message" compose windows and regular chat bubbles
+function verifyConversationRecipient(activeConvo, targetName) {
+  if (!activeConvo || !targetName) return { match: true, recipient: '' };
+  const targetFirst = extractFirstName(targetName).toLowerCase();
+  const targetFull = targetName.trim().toLowerCase();
+
+  // 1. Check pills (in "New message" compose windows, e.g. "Lourdu Eliza X")
+  const pills = Array.from(activeConvo.querySelectorAll(
+    '.artdeco-pill, [data-test-pill-text], .artdeco-pill__text, .msg-connections-typeahead__recipients, .msg-connections-typeahead'
+  ));
+  for (const pill of pills) {
+    const text = (pill.innerText || pill.textContent || '').toLowerCase();
+    if (text.includes(targetFirst) || (targetFull && text.includes(targetFull))) {
+      return { match: true, recipient: text.trim(), source: 'pill' };
+    }
+  }
+
+  // 2. Check recipient lockup card (below typeahead, e.g. "Lourdu Eliza (She/Her) · 1st")
+  const lockups = Array.from(activeConvo.querySelectorAll(
+    '.msg-entity-lockup__entity-title, .artdeco-entity-lockup__title, .msg-thread__link-to-profile, .msg-entity-lockup, a[href*="/in/"]'
+  ));
+  for (const el of lockups) {
+    const text = (el.innerText || el.textContent || '').toLowerCase();
+    if (text.includes(targetFirst) || (targetFull && text.includes(targetFull))) {
+      return { match: true, recipient: text.trim(), source: 'lockup' };
+    }
+  }
+
+  // 3. Check header title (in existing conversation threads)
+  const header = activeConvo.querySelector('header, .msg-overlay-bubble-header');
+  if (header) {
+    const headerText = (header.innerText || header.textContent || '').toLowerCase();
+    if (headerText.includes(targetFirst) || (targetFull && headerText.includes(targetFull))) {
+      return { match: true, recipient: headerText.trim(), source: 'header' };
+    }
+    // If header says "New message", check if the body of this bubble contains the target
+    if (headerText.includes('new message')) {
+      const bubbleText = (activeConvo.innerText || activeConvo.textContent || '').toLowerCase();
+      if (bubbleText.includes(targetFirst) || (targetFull && bubbleText.includes(targetFull))) {
+        return { match: true, recipient: 'New message recipient', source: 'compose-body' };
+      }
+    }
+  }
+
+  // 4. Fallback check: Entire bubble container (excluding sent message bubbles)
+  const bubbleText = (activeConvo.innerText || activeConvo.textContent || '').toLowerCase();
+  if (bubbleText.includes(targetFirst)) {
+    return { match: true, recipient: targetFirst, source: 'bubble' };
+  }
+
+  return { match: false, recipient: '' };
 }
 
 // Ultra-Resilient Message Box Finder strictly isolated to target recipient
@@ -507,47 +649,45 @@ async function waitForConversationWindow(targetName = '') {
   for (let i = 0; i < 25; i++) {
     // 1. Find all active conversation bubbles on the page
     const bubbles = Array.from(document.querySelectorAll(
-      '.msg-overlay-conversation-bubble, .msg-convo-wrapper, [data-view-name="msg-overlay-conversation-bubble"]'
+      '.msg-overlay-conversation-bubble, [data-view-name="msg-overlay-conversation-bubble"], .msg-convo-wrapper, aside.msg-overlay-container > div'
     )).filter(b => {
-      // Exclude minimized chat tabs
+      // Exclude minimized chat tabs and listing trays
       if (b.classList.contains('msg-overlay-conversation-bubble--minimized') ||
-          b.classList.contains('msg-overlay-list-bubble--is-minimized')) {
+          b.classList.contains('msg-overlay-list-bubble--is-minimized') ||
+          b.classList.contains('msg-overlay-list-bubble')) {
         return false;
       }
-      return b.offsetWidth > 0 || b.offsetHeight > 0;
+      return b.offsetWidth > 100 && b.offsetHeight > 100;
     });
 
     // 2. Specifically locate the bubble that belongs to targetName
     let matchedBubble = null;
     if (bubbles.length > 0 && targetFirst) {
       for (const bubble of bubbles) {
-        // Inspect this specific bubble's recipient section ONLY
-        const recipientEl = bubble.querySelector(
-          '.artdeco-pill, .msg-overlay-bubble-header__details, .msg-entity-lockup, ' +
-          '.msg-thread__link-to-profile, a[href*="/in/"], h2, [data-test-participant-name]'
-        );
-        const recipientText = (recipientEl ? (recipientEl.innerText || recipientEl.textContent || '') : '').toLowerCase();
-
-        if (recipientText.includes(targetFirst) || (targetFull && recipientText.includes(targetFull))) {
-          matchedBubble = bubble;
-          break;
-        }
-
-        // Secondary check: header title of this bubble
-        const headerEl = bubble.querySelector('header, .msg-overlay-bubble-header');
-        const headerText = (headerEl ? (headerEl.innerText || headerEl.textContent || '') : '').toLowerCase();
-        if (headerText.includes(targetFirst)) {
+        const check = verifyConversationRecipient(bubble, targetName);
+        if (check.match) {
           matchedBubble = bubble;
           break;
         }
       }
     }
 
-    // If only one bubble exists, verify it doesn't clearly belong to someone else
+    // If only one bubble exists, verify it belongs to targetName
     if (!matchedBubble && bubbles.length === 1) {
-      const headerText = (bubbles[0].querySelector('header, .msg-overlay-bubble-header')?.innerText || '').toLowerCase();
-      if (!targetFirst || headerText.includes(targetFirst) || !headerText) {
-        matchedBubble = bubbles[0];
+      const b = bubbles[0];
+      const check = verifyConversationRecipient(b, targetName);
+      if (check.match) {
+        matchedBubble = b;
+      } else {
+        // If it's a "New message" window, it might still be loading the recipient pill
+        const headerText = (b.querySelector('header')?.innerText || '').toLowerCase();
+        if (headerText.includes('new message')) {
+          await sleep(250);
+          const checkAgain = verifyConversationRecipient(b, targetName);
+          if (checkAgain.match) {
+            matchedBubble = b;
+          }
+        }
       }
     } else if (!matchedBubble && bubbles.length > 1) {
       // Multiple bubbles are open and none matched targetName yet: do not guess!
@@ -1137,10 +1277,8 @@ async function runAutoWelcomeSequence() {
 
       if (shouldStop) break;
 
-      // Click "Message" button (single click to prevent opening multiple compose popups)
-      conn.messageButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      conn.messageButton.focus();
-      conn.messageButton.click();
+      // Click "Message" button (single click using full simulation to prevent multiple compose popups)
+      simulateClick(conn.messageButton);
 
       // Wait for conversation/compose window to appear (with live progress on HUD)
       const convoResult = await waitForConversationWindow(conn.name);
@@ -1149,6 +1287,7 @@ async function runAutoWelcomeSequence() {
         updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
         console.warn('[LAW] Could not locate conversation window for', conn.name);
         sentMap.add(conn.profileUrl);
+        await closeAllOpenChats();
         await sleep(1000);
         continue;
       }
@@ -1157,9 +1296,9 @@ async function runAutoWelcomeSequence() {
       await sleep(600);
 
       // SAFETY GUARD: Verify that activeConvo belongs specifically to conn.name
-      const activeHeader = (activeConvo.querySelector('.artdeco-pill, header, .msg-overlay-bubble-header, .msg-entity-lockup, h2')?.innerText || '').toLowerCase();
-      if (firstName && !activeHeader.includes(firstName.toLowerCase())) {
-        console.error(`[LAW] SAFETY GUARD: Active chat header ("${activeHeader}") does NOT match "${firstName}". Aborting to prevent wrong-recipient send.`);
+      const recipientCheck = verifyConversationRecipient(activeConvo, conn.name);
+      if (!recipientCheck.match) {
+        console.error(`[LAW] SAFETY GUARD: Active chat does NOT match "${conn.name}". Aborting to prevent wrong-recipient send.`);
         updateHud(`⚠️ Chat mismatch for ${firstName}. Resetting...`, formatQuota(currentTodayCount, settings.dailyLimit));
         await closeConversationWindow(activeConvo);
         await closeAllOpenChats();
