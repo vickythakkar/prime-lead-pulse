@@ -777,71 +777,20 @@ function injectComposeTool(composeWindow) {
 }
 
 // ------ Send Interception ------
-// Catch Ctrl+Enter / Cmd+Enter keyboard shortcuts AND focused Enter/Space
-document.addEventListener('keydown', (e) => {
-  const isCtrlEnter = (e.ctrlKey || e.metaKey) && e.key === 'Enter';
-  
-  const activeEl = document.activeElement;
-  const isSendBtnFocused = activeEl && (
-    activeEl.matches('div[aria-label^="Send"], .T-I.J-J5-Ji.aoO.v7.T-I-atl.L3') || 
-    activeEl.closest('div[aria-label^="Send"], .T-I.J-J5-Ji.aoO.v7.T-I-atl.L3')
-  );
-  const isFocusedEnter = isSendBtnFocused && (e.key === 'Enter' || e.key === ' ');
-
-  if (isCtrlEnter || isFocusedEnter) {
-    const compose = e.target.closest('div[role="dialog"], .M9');
-    if (!compose) return;
-    
-    const checkbox = compose.querySelector('.prime-track-checkbox');
-    if (!checkbox || !checkbox.checked) return;
-    
-    const sendBtn = compose.querySelector('div[aria-label^="Send"], .T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
-    if (sendBtn) {
-      // Prevent Gmail from sending immediately via keyboard
-      e.preventDefault();
-      e.stopPropagation();
-      // Simulate a click on the Send button so our click interceptor handles it
-      sendBtn.click();
-    }
-  }
-}, true);
-
-document.addEventListener('click', async (e) => {
-  let isSend = e.target.closest('div[aria-label^="Send"]') || e.target.closest('.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3');
-  
-  if (!isSend) {
-    const btn = e.target.closest('[role="button"]');
-    if (btn) {
-      const txt = (btn.innerText || '').trim();
-      const aria = btn.getAttribute('aria-label') || '';
-      const tooltip = btn.getAttribute('data-tooltip') || '';
-      if (txt === 'Send' || txt === 'Send & Archive' || aria.includes('Send') || tooltip.includes('Send')) {
-        isSend = btn;
-      }
-    }
-  }
-
-  if (!isSend) return;
-
-  const compose = e.target.closest('div[role="dialog"], .M9');
+function prepareEmailTracking(compose) {
   if (!compose) return;
 
   const checkbox = compose.querySelector('.prime-track-checkbox');
   if (!checkbox || !checkbox.checked) return;
 
-  // Prevent duplicate CREATE_EMAIL if user double-clicks Send
-  if (compose.dataset.plpSending === 'true') {
-    e.preventDefault();
-    e.stopPropagation();
+  // Debounce to prevent duplicate injection if user rapid-clicks or triggers keydown + click
+  const lastPrepared = parseInt(compose.dataset.plpLastPrepared || '0', 10);
+  if (Date.now() - lastPrepared < 1500) {
     return;
   }
-  compose.dataset.plpSending = 'true';
+  compose.dataset.plpLastPrepared = Date.now().toString();
 
-  e.preventDefault();
-  e.stopPropagation();
-
-  const btn = isSend.closest('[role="button"]') || isSend;
-  const senderEmail = getActiveSenderEmail(compose) || 'unknown';
+  let senderEmail = getActiveSenderEmail(compose) || 'unknown';
   const chipElements = Array.from(compose.querySelectorAll('.vR, [data-hovercard-id], div[email]'));
   const emailMap = new Map();
   const contactUpdates = {};
@@ -896,11 +845,16 @@ document.addEventListener('click', async (e) => {
   }
 
   if (Object.keys(contactUpdates).length > 0) {
-    chrome.storage.local.get(['contactNames'], (data) => {
-      const names = data.contactNames || {};
-      Object.assign(names, contactUpdates);
-      chrome.storage.local.set({ contactNames: names });
-    });
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        chrome.storage.local.get(['contactNames'], (data) => {
+          if (chrome.runtime?.lastError) return;
+          const names = data?.contactNames || {};
+          Object.assign(names, contactUpdates);
+          chrome.storage.local.set({ contactNames: names });
+        });
+      }
+    } catch (e) {}
   }
   const subject = compose.querySelector('input[name="subjectbox"]')?.value ?? 'No Subject';
 
@@ -980,25 +934,19 @@ document.addEventListener('click', async (e) => {
   };
   emailCache.unshift(newEmail);
 
-  // Uncheck tracking so the synthetic click doesn't re-trigger our interceptor
-  checkbox.checked = false;
-  btn.style.opacity = '1';
-  btn.style.pointerEvents = 'auto';
-  delete compose.dataset.plpSending;
-
-  // Let Gmail send natively with the tracking pixel embedded!
-  btn.click();
-
   // Save to persistent storage cache in background
   try {
-    const targetKey = 'cached_emails_' + (senderEmail ? senderEmail.toLowerCase() : 'unknown');
-    chrome.storage.local.get([targetKey], (data) => {
-      const cache = data[targetKey] || [];
-      if (!cache.some(e => e.id === emailId)) {
-        cache.unshift(newEmail);
-        chrome.storage.local.set({ [targetKey]: cache });
-      }
-    });
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      const targetKey = 'cached_emails_' + (senderEmail ? senderEmail.toLowerCase() : 'unknown');
+      chrome.storage.local.get([targetKey], (data) => {
+        if (chrome.runtime?.lastError) return;
+        const cache = data?.[targetKey] || [];
+        if (!cache.some(e => e.id === emailId)) {
+          cache.unshift(newEmail);
+          chrome.storage.local.set({ [targetKey]: cache });
+        }
+      });
+    }
   } catch (e) {}
 
   // Force instant UI refresh of sent badges
@@ -1006,17 +954,73 @@ document.addEventListener('click', async (e) => {
 
   // Send CREATE_EMAIL to background service worker
   try {
-    chrome.runtime.sendMessage({
-      action: 'CREATE_EMAIL',
-      payload: { id: emailId, sender_email: senderEmail, recipient, subject }
-    }, response => {
-      if (!response || !response.success) {
-        console.error("Prime Lead Pulse background tracking failed:", response?.error || response?.data?.error);
-      }
-    });
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({
+        action: 'CREATE_EMAIL',
+        payload: { id: emailId, sender_email: senderEmail, recipient, subject }
+      }, response => {
+        if (chrome.runtime?.lastError) {
+          console.warn('Prime Lead Pulse: sendMessage lastError:', chrome.runtime.lastError.message);
+          return;
+        }
+        if (!response || !response.success) {
+          console.error('Prime Lead Pulse background tracking failed:', response?.error || response?.data?.error);
+        }
+      });
+    }
   } catch (err) {
-    console.warn("Prime Lead Pulse: Could not message background worker:", err);
+    console.warn('Prime Lead Pulse: Could not message background worker:', err);
   }
+}
+
+// Catch Ctrl+Enter / Cmd+Enter keyboard shortcuts AND focused Enter/Space
+document.addEventListener('keydown', (e) => {
+  const isCtrlEnter = (e.ctrlKey || e.metaKey) && e.key === 'Enter';
+  
+  const activeEl = document.activeElement;
+  const isSendBtnFocused = activeEl && (
+    activeEl.matches('div[aria-label^="Send"], .T-I.J-J5-Ji.aoO.v7.T-I-atl.L3, [data-tooltip^="Send"]') || 
+    activeEl.closest('div[aria-label^="Send"], .T-I.J-J5-Ji.aoO.v7.T-I-atl.L3, [data-tooltip^="Send"]')
+  );
+  const isFocusedEnter = isSendBtnFocused && (e.key === 'Enter' || e.key === ' ');
+
+  if (!isCtrlEnter && !isFocusedEnter) return;
+
+  const compose = (activeEl && activeEl.closest('div[role="dialog"], .M9')) || 
+                  (e.target && e.target.closest && e.target.closest('div[role="dialog"], .M9'));
+  if (!compose) return;
+
+  // Synchronously prepare tracking into DOM before Gmail processes the keystroke.
+  // Never preventDefault or stopPropagation - Gmail's native handler sends the email!
+  prepareEmailTracking(compose);
+}, true);
+
+document.addEventListener('click', (e) => {
+  let isSend = e.target.closest('div[aria-label^="Send"], .T-I.J-J5-Ji.aoO.v7.T-I-atl.L3, [data-tooltip^="Send"]');
+  
+  if (!isSend) {
+    const btn = e.target.closest('[role="button"]');
+    if (btn && btn.getAttribute('aria-haspopup') !== 'true') {
+      const txt = (btn.innerText || '').trim();
+      const aria = btn.getAttribute('aria-label') || '';
+      const tooltip = btn.getAttribute('data-tooltip') || '';
+      if (txt === 'Send' || txt === 'Send & Archive' || aria.startsWith('Send') || tooltip.startsWith('Send')) {
+        isSend = btn;
+      }
+    }
+  }
+
+  if (!isSend) return;
+
+  // Ignore dropdown arrow for "Schedule send"
+  if (isSend.getAttribute('aria-haspopup') === 'true' || isSend.closest('[aria-haspopup="true"]')) return;
+
+  const compose = e.target.closest('div[role="dialog"], .M9');
+  if (!compose) return;
+
+  // Synchronously prepare tracking into DOM before Gmail processes the click.
+  // Never preventDefault, stopPropagation, or synthetic click - the real trusted click reaches Gmail!
+  prepareEmailTracking(compose);
 }, true);
 
 // ------ Master MutationObserver ------
