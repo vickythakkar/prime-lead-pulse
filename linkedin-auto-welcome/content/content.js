@@ -247,7 +247,7 @@ function getConnectionCards() {
 
   // Find all profile links on page (excluding top navbar, ads, and HUD)
   const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
-    return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud, .member-insights');
+    return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud');
   });
 
   for (const link of allProfileLinks) {
@@ -262,7 +262,7 @@ function getConnectionCards() {
     if (!card) {
       let curr = link.parentElement;
       for (let i = 0; i < 6 && curr && curr !== document.body; i++) {
-        if (curr.querySelector('button, a')) {
+        if (curr.querySelector('button, a.artdeco-button')) {
           card = curr;
           break;
         }
@@ -278,39 +278,19 @@ function getConnectionCards() {
 
     if (!messageBtn) continue;
 
-    // Extract name (strictly from clean name elements, NEVER from mutual connections or generic strong tags)
+    // Extract name (strictly without matching mutual connection strong tags)
     let name = '';
-    const nameEl = card.querySelector(
-      '.mn-connection-card__name, ' +
-      '.artdeco-entity-lockup__title span[aria-hidden="true"], ' +
-      '.artdeco-entity-lockup__title a, ' +
-      '.artdeco-entity-lockup__title, ' +
-      '[data-anonymize="person-name"], ' +
-      '.mn-connection-card__details a'
-    );
+    const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], h3');
     if (nameEl) {
       name = nameEl.innerText || nameEl.textContent || '';
     } else {
       name = link.innerText || link.textContent || '';
     }
 
-    // Clean name: take first line, separate joined words, strip pronouns & titles
-    name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
-    name = name.replace(/view\s+.*?profile/gi, '').trim();
-    name = name.replace(/\(.*?\)/g, '').trim();
-    name = name.replace(/([a-z])([A-Z])/g, '$1 $2').trim();
-    const nameWords = name.split(' ').filter(w => w.length > 0 && !w.match(/^(dr|mr|mrs|ms|prof|pmp|mba|cpa|ca|1st|2nd|3rd)\.?$/i));
-    if (nameWords.length > 2) {
-      name = nameWords.slice(0, 2).join(' ');
-    } else if (nameWords.length > 0) {
-      name = nameWords.join(' ');
-    }
-    if (!name || name.length < 2) continue;
-
     // Extract occupation / headline
     let headline = '';
     const occEl = card.querySelector(
-      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle'
+      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
     );
     if (occEl) {
       headline = (occEl.innerText || occEl.textContent || '').trim();
@@ -323,10 +303,20 @@ function getConnectionCards() {
     );
     if (locEl) {
       const locText = (locEl.innerText || locEl.textContent || '').trim();
-      if (!locText.match(/connected|ago|mutual|shared|insight/i)) {
+      if (!locText.match(/connected|ago|mutual|shared/i)) {
         location = locText;
       }
     }
+
+    // Clean name: take first line, separate joined lowercase-uppercase words (e.g. MyersRealtor -> Myers Realtor)
+    name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
+    name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
+    const nameWords = name.split(' ').filter(w => w.length > 0);
+    if (nameWords.length > 2) {
+      // Keep only first 2 words for the clean name
+      name = nameWords.slice(0, 2).join(' ');
+    }
+    if (!name || name.length < 2) continue;
 
     seenUrls.add(profileUrl);
     cards.push({
@@ -340,10 +330,10 @@ function getConnectionCards() {
     });
   }
 
-  // Fallback: In case cards couldn't be discovered through links, search through all Message buttons
+  // Backup Strategy: Search directly for Message buttons if profile links scan yielded 0
   if (cards.length === 0) {
-    const allButtons = Array.from(document.querySelectorAll('button, a')).filter(b => {
-      return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #msg-overlay, aside.msg-overlay-container, #law-floating-hud') && isMessageButton(b);
+    const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
+      return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud') && isMessageButton(b);
     });
 
     for (const btn of allButtons) {
@@ -356,34 +346,28 @@ function getConnectionCards() {
       const profileUrl = normalizeUrl(link.getAttribute('href') || link.href);
       if (!profileUrl || seenUrls.has(profileUrl)) continue;
 
-      let name = '';
-      const nameEl = card.querySelector(
-        '.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], .artdeco-entity-lockup__title a, [data-anonymize="person-name"]'
-      );
-      if (nameEl) {
-        name = nameEl.innerText || nameEl.textContent || '';
-      } else {
-        name = link.innerText || link.textContent || '';
-      }
-
-      name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
-      name = name.replace(/view\s+.*?profile/gi, '').trim();
-      name = name.replace(/\(.*?\)/g, '').trim();
-      name = name.replace(/([a-z])([A-Z])/g, '$1 $2').trim();
-      const parts = name.split(' ').filter(w => w.length > 0 && !w.match(/^(dr|mr|mrs|ms|prof|pmp|mba|cpa|ca|1st|2nd|3rd)\.?$/i));
+      let name = (link.innerText || link.textContent || '').trim().split('\n')[0].replace(/\s+/g, ' ').trim();
+      name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
+      const parts = name.split(' ').filter(w => w.length > 0);
       if (parts.length > 2) name = parts.slice(0, 2).join(' ');
-      else if (parts.length > 0) name = parts.join(' ');
-      if (!name || name.length < 2) continue;
 
       let headline = '';
-      const occEl = card.querySelector('.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle');
-      if (occEl) headline = (occEl.innerText || occEl.textContent || '').trim();
+      const occEl = card.querySelector(
+        '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
+      );
+      if (occEl) {
+        headline = (occEl.innerText || occEl.textContent || '').trim();
+      }
 
       let location = '';
-      const locEl = card.querySelector('.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption');
+      const locEl = card.querySelector(
+        '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
+      );
       if (locEl) {
         const locText = (locEl.innerText || locEl.textContent || '').trim();
-        if (!locText.match(/connected|ago|mutual|shared|insight/i)) location = locText;
+        if (!locText.match(/connected|ago|mutual|shared/i)) {
+          location = locText;
+        }
       }
 
       seenUrls.add(profileUrl);
@@ -391,7 +375,7 @@ function getConnectionCards() {
         cardElement: card,
         linkElement: link,
         messageButton: btn,
-        name: name,
+        name: name || 'LinkedIn Member',
         headline: headline,
         location: location,
         profileUrl: profileUrl
