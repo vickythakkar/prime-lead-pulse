@@ -245,66 +245,56 @@ function getConnectionCards() {
   const cards = [];
   const seenUrls = new Set();
 
-  // Find all Message buttons on page (excluding top navbar, ads, msg overlays, and HUD)
-  const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
-    return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #msg-overlay, aside.msg-overlay-container, #law-floating-hud') && isMessageButton(b);
+  // Find all profile links on page (excluding top navbar, ads, and HUD)
+  const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
+    return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud, .member-insights');
   });
 
-  for (const btn of allButtons) {
-    // 1. Locate the parent connection card container
-    let card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.closest('[data-view-name*="connection"]') || btn.closest('[data-view-name*="profile"]');
+  for (const link of allProfileLinks) {
+    const rawHref = link.getAttribute('href') || link.href || '';
+    const profileUrl = normalizeUrl(rawHref);
+
+    if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
+
+    // Walk up to find the row container (li, div.artdeco-list__item, or row element)
+    let card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
+
     if (!card) {
-      let curr = btn.parentElement;
+      let curr = link.parentElement;
       for (let i = 0; i < 6 && curr && curr !== document.body; i++) {
-        if (curr.querySelector('a[href*="/in/"]')) {
+        if (curr.querySelector('button, a')) {
           card = curr;
           break;
         }
         curr = curr.parentElement;
       }
     }
+
     if (!card) continue;
 
-    // 2. Identify the PRIMARY profile link for THIS connection
-    // Strictly avoid mutual connection links (.member-insights, caption, details)
-    let link = card.querySelector(
-      '.artdeco-entity-lockup__title a[href*="/in/"], ' +
-      '.mn-connection-card__link[href*="/in/"], ' +
-      'a[data-control-name="connection_profile"], ' +
-      'a.mn-connection-card__picture[href*="/in/"]'
-    );
+    // Find the Message button inside this card
+    const buttons = Array.from(card.querySelectorAll('button, a'));
+    const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
 
-    if (!link) {
-      // Find all in-profile links inside this card, excluding mutual connection insight containers
-      const candidateLinks = Array.from(card.querySelectorAll('a[href*="/in/"]')).filter(a => {
-        return !a.closest('.member-insights, .artdeco-entity-lockup__caption, .mn-connection-card__details');
-      });
-      if (candidateLinks.length > 0) {
-        link = candidateLinks[0];
-      }
-    }
+    if (!messageBtn) continue;
 
-    if (!link) continue;
-
-    const rawHref = link.getAttribute('href') || link.href || '';
-    const profileUrl = normalizeUrl(rawHref);
-    if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
-
-    // 3. Extract the person's REAL name from the title lockup
+    // Extract name (strictly from clean name elements, NEVER from mutual connections or generic strong tags)
     let name = '';
-    const titleSpan = card.querySelector(
-      '.artdeco-entity-lockup__title span[aria-hidden="true"], ' +
+    const nameEl = card.querySelector(
       '.mn-connection-card__name, ' +
+      '.artdeco-entity-lockup__title span[aria-hidden="true"], ' +
+      '.artdeco-entity-lockup__title a, ' +
+      '.artdeco-entity-lockup__title, ' +
       '[data-anonymize="person-name"], ' +
-      '.artdeco-entity-lockup__title a'
+      '.mn-connection-card__details a'
     );
-    if (titleSpan) {
-      name = titleSpan.innerText || titleSpan.textContent || '';
+    if (nameEl) {
+      name = nameEl.innerText || nameEl.textContent || '';
     } else {
       name = link.innerText || link.textContent || '';
     }
 
-    // Clean name: remove "View ... profile", pronouns (She/Her), honorifics, etc.
+    // Clean name: take first line, separate joined words, strip pronouns & titles
     name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
     name = name.replace(/view\s+.*?profile/gi, '').trim();
     name = name.replace(/\(.*?\)/g, '').trim();
@@ -315,19 +305,18 @@ function getConnectionCards() {
     } else if (nameWords.length > 0) {
       name = nameWords.join(' ');
     }
-
     if (!name || name.length < 2) continue;
 
-    // 4. Extract occupation / headline
+    // Extract occupation / headline
     let headline = '';
     const occEl = card.querySelector(
-      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, [data-anonymize="headline"]'
+      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle'
     );
     if (occEl) {
       headline = (occEl.innerText || occEl.textContent || '').trim();
     }
 
-    // 5. Extract location directly from card if present
+    // Extract location directly from card if present
     let location = '';
     const locEl = card.querySelector(
       '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
@@ -343,7 +332,7 @@ function getConnectionCards() {
     cards.push({
       cardElement: card,
       linkElement: link,
-      messageButton: btn,
+      messageButton: messageBtn,
       name: name,
       headline: headline,
       location: location,
@@ -351,38 +340,39 @@ function getConnectionCards() {
     });
   }
 
-  // Backup Strategy: If no message buttons found via button query, scan profile links
+  // Fallback: In case cards couldn't be discovered through links, search through all Message buttons
   if (cards.length === 0) {
-    const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
-      return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud, .member-insights');
+    const allButtons = Array.from(document.querySelectorAll('button, a')).filter(b => {
+      return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #msg-overlay, aside.msg-overlay-container, #law-floating-hud') && isMessageButton(b);
     });
 
-    for (const link of allProfileLinks) {
-      const rawHref = link.getAttribute('href') || link.href || '';
-      const profileUrl = normalizeUrl(rawHref);
-      if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
-
-      let card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
+    for (const btn of allButtons) {
+      const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.parentElement?.parentElement;
       if (!card) continue;
 
-      const buttons = Array.from(card.querySelectorAll('button, a'));
-      const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
-      if (!messageBtn) continue;
+      const link = card.querySelector('a[href*="/in/"]');
+      if (!link) continue;
+
+      const profileUrl = normalizeUrl(link.getAttribute('href') || link.href);
+      if (!profileUrl || seenUrls.has(profileUrl)) continue;
 
       let name = '';
-      const titleSpan = card.querySelector('.artdeco-entity-lockup__title span[aria-hidden="true"], .mn-connection-card__name');
-      if (titleSpan) {
-        name = titleSpan.innerText || titleSpan.textContent || '';
+      const nameEl = card.querySelector(
+        '.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], .artdeco-entity-lockup__title a, [data-anonymize="person-name"]'
+      );
+      if (nameEl) {
+        name = nameEl.innerText || nameEl.textContent || '';
       } else {
         name = link.innerText || link.textContent || '';
       }
 
       name = name.split('\n')[0].replace(/\s+/g, ' ').trim();
+      name = name.replace(/view\s+.*?profile/gi, '').trim();
       name = name.replace(/\(.*?\)/g, '').trim();
       name = name.replace(/([a-z])([A-Z])/g, '$1 $2').trim();
-      const nameWords = name.split(' ').filter(w => w.length > 0 && !w.match(/^(dr|mr|mrs|ms|prof|pmp|mba|cpa|ca|1st|2nd|3rd)\.?$/i));
-      if (nameWords.length > 2) name = nameWords.slice(0, 2).join(' ');
-      else if (nameWords.length > 0) name = nameWords.join(' ');
+      const parts = name.split(' ').filter(w => w.length > 0 && !w.match(/^(dr|mr|mrs|ms|prof|pmp|mba|cpa|ca|1st|2nd|3rd)\.?$/i));
+      if (parts.length > 2) name = parts.slice(0, 2).join(' ');
+      else if (parts.length > 0) name = parts.join(' ');
       if (!name || name.length < 2) continue;
 
       let headline = '';
@@ -400,7 +390,7 @@ function getConnectionCards() {
       cards.push({
         cardElement: card,
         linkElement: link,
-        messageButton: messageBtn,
+        messageButton: btn,
         name: name,
         headline: headline,
         location: location,
