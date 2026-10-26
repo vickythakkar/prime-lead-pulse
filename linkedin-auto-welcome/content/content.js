@@ -245,67 +245,51 @@ function getConnectionCards() {
   const cards = [];
   const seenUrls = new Set();
 
-  // Find all profile links on page (excluding top navbar, ads, and HUD)
-  const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
-    return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud');
+  // Find all Message buttons on page (each connection card has exactly one Message button)
+  const allMessageButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
+    return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud') && isMessageButton(b);
   });
 
-  for (const link of allProfileLinks) {
-    const rawHref = link.getAttribute('href') || link.href || '';
+  for (const btn of allMessageButtons) {
+    // 1. Identify row / card container
+    const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.closest('[data-view-name]') || btn.parentElement?.parentElement;
+    if (!card) continue;
+
+    // 2. CRITICAL: Find the person's profile link while STRICTLY IGNORING any mutual connection links
+    // Mutual connection links are inside .member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details, dl
+    const candidateLinks = Array.from(card.querySelectorAll('a[href*="/in/"]')).filter(link => {
+      return !link.closest('.member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details, dl');
+    });
+
+    if (candidateLinks.length === 0) continue;
+
+    // The primary profile link is candidateLinks[0] (or one with an image or title)
+    const primaryLink = candidateLinks.find(l => l.querySelector('img') || l.querySelector('.mn-connection-card__name, span')) || candidateLinks[0];
+    const rawHref = primaryLink.getAttribute('href') || primaryLink.href || '';
     const profileUrl = normalizeUrl(rawHref);
 
     if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
 
-    // Walk up to find the row container (li, div.artdeco-list__item, or row element)
-    let card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
-
-    if (!card) {
-      let curr = link.parentElement;
-      for (let i = 0; i < 6 && curr && curr !== document.body; i++) {
-        if (curr.querySelector('button, a.artdeco-button')) {
-          card = curr;
-          break;
-        }
-        curr = curr.parentElement;
-      }
-    }
-
-    if (!card) continue;
-
-    // Find the Message button inside this card
-    const buttons = Array.from(card.querySelectorAll('button, a'));
-    const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
-
-    if (!messageBtn) continue;
-
-    // Extract name (strictly without matching mutual connection strong tags)
+    // 3. Extract Name:
+    // A) First priority: LinkedIn's official button aria-label (e.g. "Message Tyler Smith" or "Send message to Tyler Smith")
     let name = '';
-    const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], h3');
-    if (nameEl) {
-      name = nameEl.innerText || nameEl.textContent || '';
-    } else {
-      name = link.innerText || link.textContent || '';
+    const aria = btn.getAttribute('aria-label') || '';
+    const ariaMatch = aria.match(/(?:send\s+(?:a\s+)?message\s+to|message\s+to|message)\s+([^.,\n\r]+)/i);
+    if (ariaMatch && ariaMatch[1].trim().length > 1) {
+      name = ariaMatch[1].trim();
     }
 
-    // Extract occupation / headline
-    let headline = '';
-    const occEl = card.querySelector(
-      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
-    );
-    if (occEl) {
-      headline = (occEl.innerText || occEl.textContent || '').trim();
-    }
-
-    // Extract location directly from card if present
-    let location = '';
-    const locEl = card.querySelector(
-      '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
-    );
-    if (locEl) {
-      const locText = (locEl.innerText || locEl.textContent || '').trim();
-      if (!locText.match(/connected|ago|mutual|shared/i)) {
-        location = locText;
+    // B) Second priority: Card's primary name element (strictly excluding mutual connection text)
+    if (!name) {
+      const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], h3');
+      if (nameEl && !nameEl.closest('.member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details')) {
+        name = nameEl.innerText || nameEl.textContent || '';
       }
+    }
+
+    // C) Fallback: text of the primary non-mutual link
+    if (!name) {
+      name = primaryLink.innerText || primaryLink.textContent || '';
     }
 
     // Clean name: take first line, separate joined lowercase-uppercase words (e.g. MyersRealtor -> Myers Realtor)
@@ -313,16 +297,36 @@ function getConnectionCards() {
     name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
     const nameWords = name.split(' ').filter(w => w.length > 0);
     if (nameWords.length > 2) {
-      // Keep only first 2 words for the clean name
       name = nameWords.slice(0, 2).join(' ');
     }
     if (!name || name.length < 2) continue;
 
+    // 4. Extract occupation / headline
+    let headline = '';
+    const occEl = card.querySelector(
+      '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle'
+    );
+    if (occEl && !occEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
+      headline = (occEl.innerText || occEl.textContent || '').trim();
+    }
+
+    // 5. Extract location directly from card if present
+    let location = '';
+    const locEl = card.querySelector(
+      '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
+    );
+    if (locEl && !locEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
+      const locText = (locEl.innerText || locEl.textContent || '').trim();
+      if (!locText.match(/connected|ago|mutual|shared/i)) {
+        location = locText;
+      }
+    }
+
     seenUrls.add(profileUrl);
     cards.push({
       cardElement: card,
-      linkElement: link,
-      messageButton: messageBtn,
+      linkElement: primaryLink,
+      messageButton: btn,
       name: name,
       headline: headline,
       location: location,
@@ -330,52 +334,58 @@ function getConnectionCards() {
     });
   }
 
-  // Backup Strategy: Search directly for Message buttons if profile links scan yielded 0
+  // Backup Strategy if no message buttons matched (e.g. non-standard DOM)
   if (cards.length === 0) {
-    const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
-      return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud') && isMessageButton(b);
+    const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
+      return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud, .member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details, dl');
     });
 
-    for (const btn of allButtons) {
-      const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.parentElement?.parentElement;
+    for (const link of allProfileLinks) {
+      const rawHref = link.getAttribute('href') || link.href || '';
+      const profileUrl = normalizeUrl(rawHref);
+      if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
+
+      const card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
       if (!card) continue;
 
-      const link = card.querySelector('a[href*="/in/"]');
-      if (!link) continue;
+      const buttons = Array.from(card.querySelectorAll('button, a'));
+      const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
+      if (!messageBtn) continue;
 
-      const profileUrl = normalizeUrl(link.getAttribute('href') || link.href);
-      if (!profileUrl || seenUrls.has(profileUrl)) continue;
+      let name = '';
+      const aria = messageBtn.getAttribute('aria-label') || '';
+      const ariaMatch = aria.match(/(?:send\s+(?:a\s+)?message\s+to|message\s+to|message)\s+([^.,\n\r]+)/i);
+      if (ariaMatch && ariaMatch[1].trim().length > 1) {
+        name = ariaMatch[1].trim();
+      } else {
+        const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], h3');
+        name = nameEl ? (nameEl.innerText || nameEl.textContent || '') : (link.innerText || link.textContent || '');
+      }
 
-      let name = (link.innerText || link.textContent || '').trim().split('\n')[0].replace(/\s+/g, ' ').trim();
-      name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
+      name = name.split('\n')[0].replace(/\s+/g, ' ').trim().replace(/([a-z])([A-Z])/g, '$1 $2');
       const parts = name.split(' ').filter(w => w.length > 0);
       if (parts.length > 2) name = parts.slice(0, 2).join(' ');
+      if (!name || name.length < 2) continue;
 
       let headline = '';
-      const occEl = card.querySelector(
-        '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle, .mn-connection-card__details'
-      );
-      if (occEl) {
+      const occEl = card.querySelector('.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle');
+      if (occEl && !occEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
         headline = (occEl.innerText || occEl.textContent || '').trim();
       }
 
       let location = '';
-      const locEl = card.querySelector(
-        '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
-      );
-      if (locEl) {
+      const locEl = card.querySelector('.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption');
+      if (locEl && !locEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
         const locText = (locEl.innerText || locEl.textContent || '').trim();
-        if (!locText.match(/connected|ago|mutual|shared/i)) {
-          location = locText;
-        }
+        if (!locText.match(/connected|ago|mutual|shared/i)) location = locText;
       }
 
       seenUrls.add(profileUrl);
       cards.push({
         cardElement: card,
         linkElement: link,
-        messageButton: btn,
-        name: name || 'LinkedIn Member',
+        messageButton: messageBtn,
+        name: name,
         headline: headline,
         location: location,
         profileUrl: profileUrl
@@ -425,17 +435,115 @@ function querySelectorDeep(selector, root = document) {
   return null;
 }
 
+// UNIVERSAL CHAT & COMPOSE BUBBLE LOCATOR
+// Accurately finds both existing conversation bubbles AND "New message" compose bubbles
+function getAllOpenBubbles() {
+  const bubbles = new Set();
+
+  // 1. Direct overlay bubble selectors (covers both conversation threads AND compose bubbles)
+  const directSelectors = [
+    '.msg-overlay-conversation-bubble',
+    '.msg-overlay-compose-bubble',
+    '[class*="msg-overlay-"][class*="-bubble"]',
+    '[data-view-name*="msg-overlay"]',
+    '.msg-convo-wrapper'
+  ];
+  for (const sel of directSelectors) {
+    try {
+      document.querySelectorAll(sel).forEach(el => bubbles.add(el));
+    } catch (e) {}
+  }
+
+  // 2. Discover bubbles via their header elements
+  try {
+    const headers = document.querySelectorAll(
+      '.msg-overlay-bubble-header, header[class*="msg-overlay"], [class*="msg-overlay-bubble-header"], header'
+    );
+    for (const h of headers) {
+      const bubble = h.closest(
+        '.msg-overlay-conversation-bubble, ' +
+        '.msg-overlay-compose-bubble, ' +
+        '[class*="msg-overlay-"][class*="-bubble"], ' +
+        '[data-view-name*="msg-overlay"], ' +
+        '.msg-convo-wrapper'
+      ) || h.parentElement;
+      if (bubble && bubble !== document.body && bubble !== document.documentElement) {
+        bubbles.add(bubble);
+      }
+    }
+  } catch (e) {}
+
+  // 3. Children of any msg-overlay-container
+  try {
+    const containers = document.querySelectorAll(
+      '.msg-overlay-container, aside[class*="msg-overlay"], div[class*="msg-overlay-container"]'
+    );
+    for (const c of containers) {
+      for (const child of c.children) {
+        if (child.querySelector('header, .msg-overlay-bubble-header, form.msg-form, textarea, [contenteditable="true"]')) {
+          bubbles.add(child);
+        }
+      }
+    }
+  } catch (e) {}
+
+  // Filter for visible, active, expanded chat/compose overlays
+  return Array.from(bubbles).filter(b => {
+    if (!b || b === document.body || b === document.documentElement) return false;
+    if (b.closest && b.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
+    if (b.id === 'law-floating-hud') return false;
+
+    // Filter out minimized inbox tray (e.g. bottom-right "Messaging" bar) unless it has an active editor
+    if (b.classList.contains('msg-overlay-list-bubble') &&
+        !b.classList.contains('msg-overlay-conversation-bubble') &&
+        !b.classList.contains('msg-overlay-compose-bubble')) {
+      if (!b.querySelector('form.msg-form, textarea, [contenteditable="true"], div[role="textbox"]')) {
+        return false;
+      }
+    }
+
+    // Must be expanded
+    const rect = b.getBoundingClientRect();
+    const w = rect.width || b.offsetWidth || 0;
+    const h = rect.height || b.offsetHeight || 0;
+    return w > 120 && h > 120;
+  });
+}
+
+// Find any text input / message editor inside a conversation or compose bubble
+function findTextBoxInBubble(bubble) {
+  if (!bubble) return null;
+  const selectors = [
+    'div.msg-form__contenteditable[contenteditable="true"]',
+    '.msg-form__contenteditable',
+    '.public-DraftEditor-content[contenteditable="true"]',
+    'form.msg-form [contenteditable="true"]',
+    'div[role="textbox"][contenteditable="true"]',
+    'div[role="textbox"]',
+    'textarea[name="message"]',
+    'textarea.msg-form__textarea',
+    'textarea',
+    'div[aria-label*="Write a message" i]',
+    'div[data-placeholder*="Write a message" i]',
+    '[contenteditable="true"]'
+  ];
+  for (const sel of selectors) {
+    try {
+      const el = bubble.querySelector(sel);
+      if (el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0)) {
+        return el;
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
 // Close all existing open chat / compose windows cleanly
 async function closeAllOpenChats() {
-  for (let pass = 0; pass < 2; pass++) {
-    // 1. Identify all conversation / compose overlay bubbles on screen
-    const bubbles = Array.from(document.querySelectorAll(
-      '.msg-overlay-conversation-bubble, [data-view-name="msg-overlay-conversation-bubble"], .msg-convo-wrapper, aside.msg-overlay-container > div'
-    )).filter(b => {
-      if (b.classList.contains('msg-overlay-list-bubble')) return false;
-      return b.offsetWidth > 0 || b.offsetHeight > 0;
-    });
+  for (let pass = 0; pass < 3; pass++) {
+    const bubbles = getAllOpenBubbles();
 
+    // 1. Close each open bubble found
     for (const bubble of bubbles) {
       let closeBtn = null;
 
@@ -449,11 +557,11 @@ async function closeAllOpenChats() {
         );
       } catch (e) {}
 
-      // Header controls last button (The top-right "X" button is always last)
+      // Header controls: the top-right "X" button is always the last button in the header
       if (!closeBtn) {
         try {
           const headerBtns = Array.from(bubble.querySelectorAll(
-            'header.msg-overlay-bubble-header button, .msg-overlay-bubble-header button, header button'
+            '.msg-overlay-bubble-header button, header button'
           ));
           if (headerBtns.length > 0) {
             closeBtn = headerBtns[headerBtns.length - 1];
@@ -476,15 +584,16 @@ async function closeAllOpenChats() {
       }
     }
 
-    // 2. Also close any collapsed chat pills or dock tabs at the bottom bar (e.g. "Homera Khan X")
+    // 2. Also close any global close buttons across overlay containers
     try {
-      const pillCloseBtns = Array.from(document.querySelectorAll(
-        '.msg-overlay-list-bubble button[aria-label*="Close" i], ' +
+      const overlayCloseBtns = Array.from(document.querySelectorAll(
+        '.msg-overlay-container button[aria-label*="Close" i], ' +
         '.msg-overlay-bubble-header button[aria-label*="Close" i], ' +
-        'button[data-control-name="overlay.close_conversation_window"]'
-      ));
-      for (const btn of pillCloseBtns) {
-        if (btn.closest('#law-floating-hud, #global-nav, .global-nav, nav')) continue;
+        'button[data-control-name="overlay.close_conversation_window"], ' +
+        'button[data-control-name*="close_conversation"]'
+      )).filter(b => !b.closest('#law-floating-hud, #global-nav, .global-nav, nav'));
+
+      for (const btn of overlayCloseBtns) {
         simulateClick(btn);
       }
     } catch (e) {}
@@ -502,21 +611,10 @@ async function closeAllOpenChats() {
       }
     } catch (e) {}
 
-    await sleep(200);
+    await sleep(250);
 
-    // Check if any open bubbles still exist
-    const remaining = Array.from(document.querySelectorAll(
-      '.msg-overlay-conversation-bubble, [data-view-name="msg-overlay-conversation-bubble"]'
-    )).filter(b => {
-      if (b.classList.contains('msg-overlay-conversation-bubble--minimized') ||
-          b.classList.contains('msg-overlay-list-bubble--is-minimized') ||
-          b.classList.contains('msg-overlay-list-bubble')) {
-        return false;
-      }
-      return b.offsetWidth > 100 && b.offsetHeight > 100;
-    });
-
-    if (remaining.length === 0) break;
+    // If no expanded bubbles remain, all clear!
+    if (getAllOpenBubbles().length === 0) break;
   }
 }
 
@@ -536,7 +634,7 @@ async function closeConversationWindow(convoEl) {
     if (!closeBtn) {
       try {
         const headerBtns = Array.from(convoEl.querySelectorAll(
-          'header.msg-overlay-bubble-header button, .msg-overlay-bubble-header button, header button'
+          '.msg-overlay-bubble-header button, header button'
         ));
         if (headerBtns.length > 0) {
           closeBtn = headerBtns[headerBtns.length - 1];
@@ -568,9 +666,9 @@ function verifyConversationRecipient(activeConvo, targetName) {
   const targetFirst = extractFirstName(targetName).toLowerCase();
   const targetFull = targetName.trim().toLowerCase();
 
-  // 1. Check pills (in "New message" compose windows, e.g. "Lourdu Eliza X")
+  // 1. Check pills (in "New message" compose windows, e.g. "Saeed Ahmad X")
   const pills = Array.from(activeConvo.querySelectorAll(
-    '.artdeco-pill, [data-test-pill-text], .artdeco-pill__text, .msg-connections-typeahead__recipients, .msg-connections-typeahead'
+    '.artdeco-pill, [data-test-pill-text], .artdeco-pill__text, .msg-connections-typeahead__recipients, .msg-connections-typeahead, [class*="pill"]'
   ));
   for (const pill of pills) {
     const text = (pill.innerText || pill.textContent || '').toLowerCase();
@@ -579,7 +677,7 @@ function verifyConversationRecipient(activeConvo, targetName) {
     }
   }
 
-  // 2. Check recipient lockup card (below typeahead, e.g. "Lourdu Eliza (She/Her) · 1st")
+  // 2. Check recipient lockup card (below typeahead, e.g. "Saeed Ahmad · 1st")
   const lockups = Array.from(activeConvo.querySelectorAll(
     '.msg-entity-lockup__entity-title, .artdeco-entity-lockup__title, .msg-thread__link-to-profile, .msg-entity-lockup, a[href*="/in/"]'
   ));
@@ -591,14 +689,14 @@ function verifyConversationRecipient(activeConvo, targetName) {
   }
 
   // 3. Check header title (in existing conversation threads)
-  const header = activeConvo.querySelector('header, .msg-overlay-bubble-header');
+  const header = activeConvo.querySelector('.msg-overlay-bubble-header, header');
   if (header) {
     const headerText = (header.innerText || header.textContent || '').toLowerCase();
     if (headerText.includes(targetFirst) || (targetFull && headerText.includes(targetFull))) {
       return { match: true, recipient: headerText.trim(), source: 'header' };
     }
     // If header says "New message", check if the body of this bubble contains the target
-    if (headerText.includes('new message')) {
+    if (headerText.includes('new message') || headerText.includes('compose')) {
       const bubbleText = (activeConvo.innerText || activeConvo.textContent || '').toLowerCase();
       if (bubbleText.includes(targetFirst) || (targetFull && bubbleText.includes(targetFull))) {
         return { match: true, recipient: 'New message recipient', source: 'compose-body' };
@@ -606,7 +704,7 @@ function verifyConversationRecipient(activeConvo, targetName) {
     }
   }
 
-  // 4. Fallback check: Entire bubble container (excluding sent message bubbles)
+  // 4. Fallback check: Entire bubble container
   const bubbleText = (activeConvo.innerText || activeConvo.textContent || '').toLowerCase();
   if (bubbleText.includes(targetFirst)) {
     return { match: true, recipient: targetFirst, source: 'bubble' };
@@ -620,23 +718,14 @@ async function waitForConversationWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  for (let i = 0; i < 25; i++) {
-    // 1. Find all active conversation bubbles on the page
-    const bubbles = Array.from(document.querySelectorAll(
-      '.msg-overlay-conversation-bubble, [data-view-name="msg-overlay-conversation-bubble"], .msg-convo-wrapper, aside.msg-overlay-container > div'
-    )).filter(b => {
-      // Exclude minimized chat tabs and listing trays
-      if (b.classList.contains('msg-overlay-conversation-bubble--minimized') ||
-          b.classList.contains('msg-overlay-list-bubble--is-minimized') ||
-          b.classList.contains('msg-overlay-list-bubble')) {
-        return false;
-      }
-      return b.offsetWidth > 100 && b.offsetHeight > 100;
-    });
+  for (let i = 0; i < 30; i++) {
+    // 1. Find all active expanded bubbles on the page
+    const bubbles = getAllOpenBubbles();
 
-    // 2. Specifically locate the bubble that belongs to targetName
+    // 2. Locate the bubble that matches targetName
     let matchedBubble = null;
-    if (bubbles.length > 0 && targetFirst) {
+    if (bubbles.length > 0) {
+      // Priority 2a: Explicit match on recipient
       for (const bubble of bubbles) {
         const check = verifyConversationRecipient(bubble, targetName);
         if (check.match) {
@@ -644,65 +733,54 @@ async function waitForConversationWindow(targetName = '') {
           break;
         }
       }
-    }
 
-    // If only one bubble exists, verify it belongs to targetName
-    if (!matchedBubble && bubbles.length === 1) {
-      const b = bubbles[0];
-      const check = verifyConversationRecipient(b, targetName);
-      if (check.match) {
-        matchedBubble = b;
-      } else {
-        // If it's a "New message" window, it might still be loading the recipient pill
-        const headerText = (b.querySelector('header')?.innerText || '').toLowerCase();
-        if (headerText.includes('new message')) {
-          await sleep(250);
-          const checkAgain = verifyConversationRecipient(b, targetName);
-          if (checkAgain.match) {
+      // Priority 2b: If only 1 bubble is open and we just clicked Message on targetName
+      if (!matchedBubble && bubbles.length === 1) {
+        const b = bubbles[0];
+        // After 4 iterations (~1.2s), if compose window editor is ready and matches
+        if (i >= 4) {
+          const tb = findTextBoxInBubble(b);
+          if (tb) {
             matchedBubble = b;
           }
         }
       }
-    } else if (!matchedBubble && bubbles.length > 1) {
-      // Multiple bubbles are open and none matched targetName yet: do not guess!
-      console.log(`[LAW] Multiple chat bubbles open (${bubbles.length}). Waiting for ${targetName}'s window...`);
-      await sleep(350);
-      continue;
     }
 
     if (matchedBubble) {
-      // Find the Draft.js contenteditable box strictly INSIDE this matched bubble
-      const textbox = matchedBubble.querySelector(
-        'div.msg-form__contenteditable[contenteditable="true"], ' +
-        '.msg-form__contenteditable, ' +
-        '.public-DraftEditor-content[contenteditable="true"], ' +
-        'form.msg-form [contenteditable="true"], ' +
-        'div[aria-label*="Write a message" i], ' +
-        'div[data-placeholder*="Write a message" i], ' +
-        '[contenteditable="true"]'
-      );
-
+      // Find the textbox strictly INSIDE this matched bubble
+      const textbox = findTextBoxInBubble(matchedBubble);
       if (textbox) {
+        // CLEANUP: If any OTHER bubbles are open that aren't the matched one, close them now
+        for (const other of bubbles) {
+          if (other !== matchedBubble) {
+            try {
+              const closeBtn = other.querySelector(
+                'button[aria-label*="Close" i], button[data-control-name*="close"], .msg-overlay-bubble-header button:last-child'
+              );
+              if (closeBtn) simulateClick(closeBtn);
+            } catch (e) {}
+          }
+        }
+
         console.log(`[LAW] Successfully locked conversation window for ${targetName}`);
         return { textbox, container: matchedBubble };
       }
     }
 
     if (i % 2 === 0 && targetName) {
-      updateHud(`Opening chat with ${targetName} (${Math.round((25 - i) * 0.35)}s)...`);
+      updateHud(`Opening chat with ${targetName} (${Math.round((30 - i) * 0.3)}s)...`);
     }
 
-    await sleep(350);
+    await sleep(300);
   }
 
   console.warn(`[LAW] Could not reliably locate conversation window for ${targetName}`);
   return null;
 }
 
-
-
 /**
- * Type text into LinkedIn's React / Draft.js message editor.
+ * Type text into LinkedIn's React / Draft.js message editor or textarea.
  */
 async function typeIntoReactInput(element, text) {
   if (!element || !text) return false;
@@ -710,6 +788,16 @@ async function typeIntoReactInput(element, text) {
   console.log('[LAW] typeIntoReactInput starting with text length:', text.length);
 
   try {
+    // Handle native TEXTAREA or INPUT
+    if (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT') {
+      try { element.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+      element.focus();
+      element.value = text;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+
     // Focus target (either element itself or inner Draft.js editor child)
     const target = (element.querySelector && element.querySelector('.public-DraftEditor-content, p')) || element;
     try { target.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
@@ -805,7 +893,8 @@ function findSendButton(container, textBox) {
       'button[type="submit"], ' +
       'button.msg-form__send-button, ' +
       'button.msg-form__send-btn, ' +
-      'button[data-test-msg-send-btn="true"]'
+      'button[data-test-msg-send-btn="true"], ' +
+      'button[data-control-name="send"]'
     );
     if (formSendBtn && (formSendBtn.offsetWidth > 0 || formSendBtn.offsetHeight > 0)) {
       return formSendBtn;
@@ -829,7 +918,8 @@ function findSendButton(container, textBox) {
       'button[data-test-msg-send-btn="true"]',
       'button[type="submit"].msg-form__send-btn',
       'button.msg-form__send-btn',
-      'button[type="submit"]'
+      'button[type="submit"], ' +
+      'button[data-control-name="send"]'
     ];
 
     for (const sel of selectors) {
@@ -1269,8 +1359,15 @@ async function runAutoWelcomeSequence() {
       const { textbox: textBox, container: activeConvo } = convoResult;
       await sleep(600);
 
-      // SAFETY GUARD: Verify that activeConvo belongs specifically to conn.name
-      const recipientCheck = verifyConversationRecipient(activeConvo, conn.name);
+      // SAFETY GUARD: Verify that activeConvo belongs specifically to conn.name (with 3-attempt grace for async pill render)
+      let recipientCheck = verifyConversationRecipient(activeConvo, conn.name);
+      if (!recipientCheck.match) {
+        for (let r = 0; r < 3; r++) {
+          await sleep(400);
+          recipientCheck = verifyConversationRecipient(activeConvo, conn.name);
+          if (recipientCheck.match) break;
+        }
+      }
       if (!recipientCheck.match) {
         console.error(`[LAW] SAFETY GUARD: Active chat does NOT match "${conn.name}". Aborting to prevent wrong-recipient send.`);
         updateHud(`⚠️ Chat mismatch for ${firstName}. Resetting...`, formatQuota(currentTodayCount, settings.dailyLimit));
