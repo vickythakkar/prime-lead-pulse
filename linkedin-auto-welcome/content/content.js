@@ -245,51 +245,57 @@ function getConnectionCards() {
   const cards = [];
   const seenUrls = new Set();
 
-  // Find all Message buttons on page (each connection card has exactly one Message button)
-  const allMessageButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
-    return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud') && isMessageButton(b);
+  // Primary strategy: scan all profile links on page
+  // Exclude top navbar, ads, HUD, and mutual connection insight containers (.member-insights)
+  const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
+    return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud, .member-insights, [class*="member-insight"], [class*="mutual-connection"]');
   });
 
-  for (const btn of allMessageButtons) {
-    // 1. Identify row / card container
-    const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.closest('[data-view-name]') || btn.parentElement?.parentElement;
-    if (!card) continue;
-
-    // 2. CRITICAL: Find the person's profile link while STRICTLY IGNORING any mutual connection links
-    // Mutual connection links are inside .member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details, dl
-    const candidateLinks = Array.from(card.querySelectorAll('a[href*="/in/"]')).filter(link => {
-      return !link.closest('.member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details, dl');
-    });
-
-    if (candidateLinks.length === 0) continue;
-
-    // The primary profile link is candidateLinks[0] (or one with an image or title)
-    const primaryLink = candidateLinks.find(l => l.querySelector('img') || l.querySelector('.mn-connection-card__name, span')) || candidateLinks[0];
-    const rawHref = primaryLink.getAttribute('href') || primaryLink.href || '';
+  for (const link of allProfileLinks) {
+    const rawHref = link.getAttribute('href') || link.href || '';
     const profileUrl = normalizeUrl(rawHref);
 
     if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
 
-    // 3. Extract Name:
-    // A) First priority: LinkedIn's official button aria-label (e.g. "Message Tyler Smith" or "Send message to Tyler Smith")
+    // Walk up to find the row container (li, div.artdeco-list__item, or row element)
+    let card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
+
+    if (!card) {
+      let curr = link.parentElement;
+      for (let i = 0; i < 6 && curr && curr !== document.body; i++) {
+        if (curr.querySelector('button, a.artdeco-button')) {
+          card = curr;
+          break;
+        }
+        curr = curr.parentElement;
+      }
+    }
+
+    if (!card) continue;
+
+    // Find the Message button inside this card
+    const buttons = Array.from(card.querySelectorAll('button, a'));
+    const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
+
+    if (!messageBtn) continue;
+
+    // Extract name:
+    // 1. First priority: LinkedIn's official Message button aria-label (e.g. "Message Karley Jones" or "Send message to Karley Jones")
     let name = '';
-    const aria = btn.getAttribute('aria-label') || '';
+    const aria = messageBtn.getAttribute('aria-label') || '';
     const ariaMatch = aria.match(/(?:send\s+(?:a\s+)?message\s+to|message\s+to|message)\s+([^.,\n\r]+)/i);
     if (ariaMatch && ariaMatch[1].trim().length > 1) {
       name = ariaMatch[1].trim();
     }
 
-    // B) Second priority: Card's primary name element (strictly excluding mutual connection text)
+    // 2. Second priority: Standard name elements
     if (!name) {
       const nameEl = card.querySelector('.mn-connection-card__name, .artdeco-entity-lockup__title span[aria-hidden="true"], h3');
-      if (nameEl && !nameEl.closest('.member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details')) {
+      if (nameEl) {
         name = nameEl.innerText || nameEl.textContent || '';
+      } else {
+        name = link.innerText || link.textContent || '';
       }
-    }
-
-    // C) Fallback: text of the primary non-mutual link
-    if (!name) {
-      name = primaryLink.innerText || primaryLink.textContent || '';
     }
 
     // Clean name: take first line, separate joined lowercase-uppercase words (e.g. MyersRealtor -> Myers Realtor)
@@ -297,25 +303,26 @@ function getConnectionCards() {
     name = name.replace(/([a-z])([A-Z])/g, '$1 $2');
     const nameWords = name.split(' ').filter(w => w.length > 0);
     if (nameWords.length > 2) {
+      // Keep only first 2 words for the clean name
       name = nameWords.slice(0, 2).join(' ');
     }
     if (!name || name.length < 2) continue;
 
-    // 4. Extract occupation / headline
+    // Extract occupation / headline
     let headline = '';
     const occEl = card.querySelector(
       '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle'
     );
-    if (occEl && !occEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
+    if (occEl) {
       headline = (occEl.innerText || occEl.textContent || '').trim();
     }
 
-    // 5. Extract location directly from card if present
+    // Extract location directly from card if present
     let location = '';
     const locEl = card.querySelector(
       '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
     );
-    if (locEl && !locEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
+    if (locEl) {
       const locText = (locEl.innerText || locEl.textContent || '').trim();
       if (!locText.match(/connected|ago|mutual|shared/i)) {
         location = locText;
@@ -325,8 +332,8 @@ function getConnectionCards() {
     seenUrls.add(profileUrl);
     cards.push({
       cardElement: card,
-      linkElement: primaryLink,
-      messageButton: btn,
+      linkElement: link,
+      messageButton: messageBtn,
       name: name,
       headline: headline,
       location: location,
@@ -334,26 +341,28 @@ function getConnectionCards() {
     });
   }
 
-  // Backup Strategy if no message buttons matched (e.g. non-standard DOM)
+  // Backup Strategy: Search directly for Message buttons if profile links scan yielded 0
   if (cards.length === 0) {
-    const allProfileLinks = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(link => {
-      return !link.closest('header, nav, #global-nav, .global-nav, aside.scaffold-layout__aside, #law-floating-hud, .member-insights, [class*="mutual"], [class*="insight"], .mn-connection-card__details, dl');
+    const allButtons = Array.from(document.querySelectorAll('button, a.artdeco-button')).filter(b => {
+      return !b.closest('header, nav, #global-nav, .global-nav, .msg-overlay-container, #law-floating-hud') && isMessageButton(b);
     });
 
-    for (const link of allProfileLinks) {
-      const rawHref = link.getAttribute('href') || link.href || '';
-      const profileUrl = normalizeUrl(rawHref);
-      if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
-
-      const card = link.closest('li') || link.closest('.artdeco-list__item') || link.closest('[data-view-name]');
+    for (const btn of allButtons) {
+      const card = btn.closest('li') || btn.closest('.artdeco-list__item') || btn.parentElement?.parentElement;
       if (!card) continue;
 
-      const buttons = Array.from(card.querySelectorAll('button, a'));
-      const messageBtn = buttons.find(b => b !== link && !b.contains(link) && isMessageButton(b));
-      if (!messageBtn) continue;
+      // Find primary profile link inside this card, skipping mutual connection containers
+      const allCardLinks = Array.from(card.querySelectorAll('a[href*="/in/"]')).filter(a => {
+        return !a.closest('.member-insights, [class*="member-insight"], [class*="mutual-connection"]');
+      });
+      if (allCardLinks.length === 0) continue;
+      const link = allCardLinks[0];
+
+      const profileUrl = normalizeUrl(link.getAttribute('href') || link.href);
+      if (!profileUrl || seenUrls.has(profileUrl) || profileUrl.includes('/in/unavailable')) continue;
 
       let name = '';
-      const aria = messageBtn.getAttribute('aria-label') || '';
+      const aria = btn.getAttribute('aria-label') || '';
       const ariaMatch = aria.match(/(?:send\s+(?:a\s+)?message\s+to|message\s+to|message)\s+([^.,\n\r]+)/i);
       if (ariaMatch && ariaMatch[1].trim().length > 1) {
         name = ariaMatch[1].trim();
@@ -368,24 +377,30 @@ function getConnectionCards() {
       if (!name || name.length < 2) continue;
 
       let headline = '';
-      const occEl = card.querySelector('.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle');
-      if (occEl && !occEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
+      const occEl = card.querySelector(
+        '.mn-connection-card__occupation, .artdeco-entity-lockup__subtitle'
+      );
+      if (occEl) {
         headline = (occEl.innerText || occEl.textContent || '').trim();
       }
 
       let location = '';
-      const locEl = card.querySelector('.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption');
-      if (locEl && !locEl.closest('.member-insights, [class*="mutual"], [class*="insight"]')) {
+      const locEl = card.querySelector(
+        '.mn-connection-card__location, [data-anonymize="location"], .artdeco-entity-lockup__caption'
+      );
+      if (locEl) {
         const locText = (locEl.innerText || locEl.textContent || '').trim();
-        if (!locText.match(/connected|ago|mutual|shared/i)) location = locText;
+        if (!locText.match(/connected|ago|mutual|shared/i)) {
+          location = locText;
+        }
       }
 
       seenUrls.add(profileUrl);
       cards.push({
         cardElement: card,
         linkElement: link,
-        messageButton: messageBtn,
-        name: name,
+        messageButton: btn,
+        name: name || 'LinkedIn Member',
         headline: headline,
         location: location,
         profileUrl: profileUrl
