@@ -689,6 +689,36 @@ function verifyConversationRecipient(activeConvo, targetName) {
   return { match: false, recipient: '' };
 }
 
+// Walk up DOM from a textbox to find the compose/conversation window container
+// that includes the target name in its text. Much more reliable than .closest() with class selectors.
+function findContainerWithName(startEl, targetFirst, targetFull) {
+  let el = startEl;
+  let bestContainer = null;
+
+  // Walk up at most 20 levels looking for an ancestor whose text includes the target name
+  for (let depth = 0; depth < 20 && el && el !== document.body && el !== document.documentElement; depth++) {
+    el = el.parentElement;
+    if (!el) break;
+
+    const text = (el.innerText || el.textContent || '').toLowerCase();
+    const hasName = (targetFirst && text.includes(targetFirst)) ||
+                    (targetFull && text.includes(targetFull));
+
+    if (hasName) {
+      bestContainer = el;
+      // Keep going up a few more levels to find the actual window boundary
+      // (the smallest ancestor that has both the name AND a close button / header)
+      const hasHeader = el.querySelector('.msg-overlay-bubble-header, header, [class*="bubble-header"]');
+      const hasClose = el.querySelector('button[aria-label*="Close" i], button[data-control-name*="close"]');
+      if (hasHeader || hasClose) {
+        return el; // This is the actual window container
+      }
+    }
+  }
+
+  return bestContainer; // Return the deepest ancestor that contained the name
+}
+
 // Ultra-Resilient Message Box Finder strictly isolated to target recipient
 async function waitForConversationWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
@@ -697,8 +727,7 @@ async function waitForConversationWindow(targetName = '') {
   console.log(`[LAW] Waiting for conversation/compose window for "${targetName}" (first: "${targetFirst}")...`);
 
   for (let i = 0; i < 35; i++) {
-    // STRATEGY 1: DIRECT TEXTBOX LOCATOR (Fastest & Most Reliable across all LinkedIn versions)
-    // Find all active message input boxes on the page
+    // Find ALL visible message editors on the page
     const candidateTextboxes = Array.from(document.querySelectorAll(
       'div.msg-form__contenteditable[contenteditable="true"], ' +
       'div.msg-form__contenteditable, ' +
@@ -719,44 +748,45 @@ async function waitForConversationWindow(targetName = '') {
     });
 
     if (candidateTextboxes.length > 0) {
+      // STRATEGY 1: Walk up DOM tree from each textbox to find the window containing targetName
       for (const tb of candidateTextboxes) {
-        // Find enclosing window / form container
-        const container = tb.closest(
-          '.msg-overlay-conversation-bubble, ' +
-          '.msg-overlay-compose-bubble, ' +
-          '[class*="msg-overlay-"][class*="-bubble"], ' +
-          '[data-view-name*="msg-overlay"], ' +
-          '.msg-convo-wrapper, ' +
-          '.msg-overlay-container > div, ' +
-          'aside[class*="msg-overlay"] > div'
-        ) || tb.closest('form.msg-form') || tb.closest('form') || tb.parentElement?.parentElement?.parentElement?.parentElement;
+        const container = findContainerWithName(tb, targetFirst, targetFull);
+        if (container) {
+          // Close any OTHER open textboxes that are NOT for this target
+          for (const otherTb of candidateTextboxes) {
+            if (otherTb === tb) continue;
+            try {
+              let otherParent = otherTb.parentElement;
+              for (let d = 0; d < 15 && otherParent && otherParent !== document.body; d++) {
+                const btn = otherParent.querySelector('button[aria-label*="Close" i], button[data-control-name*="close"]');
+                if (btn) { simulateClick(btn); break; }
+                otherParent = otherParent.parentElement;
+              }
+            } catch (e) {}
+          }
 
-        if (!container) continue;
-
-        // Check if this container belongs to targetName
-        const containerText = (container.innerText || container.textContent || '').toLowerCase();
-
-        // Check if recipient matches targetName
-        const matchesTarget = !targetFirst ||
-          containerText.includes(targetFirst) ||
-          (targetFull && containerText.includes(targetFull)) ||
-          verifyConversationRecipient(container, targetName).match;
-
-        if (matchesTarget) {
-          console.log(`[LAW] Successfully locked conversation window for ${targetName} via Strategy 1 (Direct Textbox)!`);
-          return { textbox: tb, container: container };
-        }
-
-        // If only 1 textbox is open on the page and we've waited at least 1.2s (i >= 4)
-        // for LinkedIn's async typeahead to render the recipient pill:
-        if (candidateTextboxes.length === 1 && i >= 4) {
-          console.log(`[LAW] Single active compose window locked for ${targetName} after wait cycle ${i}!`);
+          console.log(`[LAW] Successfully locked conversation window for ${targetName} (DOM walk, iter ${i})!`);
           return { textbox: tb, container: container };
         }
       }
+
+      // STRATEGY 2: If only 1 textbox is open and we've waited > 1.2s for pill to render
+      if (candidateTextboxes.length === 1 && i >= 4) {
+        const tb = candidateTextboxes[0];
+        // Walk up to find any reasonable container (one with a header or close button)
+        let container = tb.parentElement;
+        for (let d = 0; d < 15 && container && container !== document.body; d++) {
+          if (container.querySelector('.msg-overlay-bubble-header, header, button[aria-label*="Close" i]')) {
+            break;
+          }
+          container = container.parentElement;
+        }
+        console.log(`[LAW] Single active editor accepted for ${targetName} after ${i} cycles.`);
+        return { textbox: tb, container: container || tb.parentElement };
+      }
     }
 
-    // STRATEGY 2: BUBBLE LOCATOR FALLBACK
+    // STRATEGY 3: BUBBLE LOCATOR FALLBACK
     const bubbles = getAllOpenBubbles();
     if (bubbles.length > 0) {
       for (const bubble of bubbles) {
@@ -764,7 +794,7 @@ async function waitForConversationWindow(targetName = '') {
         if (check.match) {
           const textbox = findTextBoxInBubble(bubble);
           if (textbox) {
-            console.log(`[LAW] Successfully locked conversation window for ${targetName} via Strategy 2 (Bubble)!`);
+            console.log(`[LAW] Locked via bubble match for ${targetName} (iter ${i})!`);
             return { textbox, container: bubble };
           }
         }
@@ -773,13 +803,13 @@ async function waitForConversationWindow(targetName = '') {
       if (bubbles.length === 1 && i >= 4) {
         const textbox = findTextBoxInBubble(bubbles[0]);
         if (textbox) {
-          console.log(`[LAW] Single open bubble locked for ${targetName} via Strategy 2!`);
+          console.log(`[LAW] Single bubble accepted for ${targetName} (iter ${i}).`);
           return { textbox, container: bubbles[0] };
         }
       }
     }
 
-    if (i % 2 === 0 && targetName) {
+    if (i % 3 === 0 && targetName) {
       updateHud(`Opening chat with ${targetName} (${Math.round((35 - i) * 0.3)}s)...`);
     }
 
