@@ -695,33 +695,47 @@ function verifyConversationRecipient(activeConvo, targetName) {
   return { match: false, recipient: '' };
 }
 
-// Universal Active Chat Finder using Lowest Common Ancestor (LCA)
+// Helper to extract the message editor from any chat window container
+function findEditorInsideWindow(win) {
+  if (!win) return null;
+  const candidates = Array.from(win.querySelectorAll('*')).filter(el => {
+    if (el.tagName === 'INPUT' && el.type === 'text') return false;
+    if (el.closest('.msg-connections-typeahead__search-field, .msg-connections-typeahead input')) return false;
+
+    if (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) return true;
+    if (el.getAttribute('role') === 'textbox') return true;
+    if (el.tagName === 'TEXTAREA') return true;
+    if (el.classList.contains('msg-form__contenteditable')) return true;
+
+    const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
+    if (ph.includes('message')) return true;
+
+    const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+    if (txt === 'write a message...' || txt.startsWith('write a message')) return true;
+
+    return false;
+  });
+
+  if (candidates.length === 0) return null;
+
+  // Return the actual editable element
+  const preferred = candidates.find(e => e.isContentEditable || e.getAttribute('contenteditable') === 'true' || e.tagName === 'TEXTAREA' || e.getAttribute('role') === 'textbox');
+  return preferred || candidates[0];
+}
+
+// Universal Active Chat Finder: Guaranteed lock-on using Non-Card Recipient Match & Lowest Common Ancestor
 function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // APPROACH 1: Search from recipient elements in aside / overlays
-  const allPotentialRecipients = Array.from(document.querySelectorAll([
-    'aside [class*="pill"]',
-    'aside [class*="lockup"]',
-    'aside [class*="title"]',
-    'aside [class*="typeahead"]',
-    'aside h2',
-    'aside h3',
-    'aside span',
-    'aside a',
-    '[role="dialog"] [class*="pill"]',
-    '[role="dialog"] [class*="lockup"]',
-    '[role="dialog"] [class*="title"]',
-    '[role="dialog"] h2',
-    '[role="dialog"] h3',
-    '[role="dialog"] span',
-    '[class*="msg-overlay"] [class*="pill"]',
-    '[class*="msg-overlay"] [class*="lockup"]',
-    '[class*="msg-overlay"] h2',
-    '[class*="msg-overlay"] span'
-  ].join(','))).filter(el => {
-    if (!el || el.closest('#law-floating-hud, header, nav, #global-nav, .global-nav, .msg-overlay-list-bubble')) return false;
+  // STAGE 1: Find any element containing recipient name OUTSIDE the connection card feed
+  const nonCardMatches = Array.from(document.querySelectorAll('*')).filter(el => {
+    if (!el) return false;
+    // Strictly exclude the connection card feed and HUD/nav
+    if (el.closest('.mn-connection-card, [class*="connection-card"], li.artdeco-list__item, main, #main, .scaffold-layout__main')) return false;
+    if (el.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble')) return false;
+
+    // Has text matching targetFirst or targetFull
     const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
     if (!txt) return false;
     if (targetFirst && targetFirst !== 'there' && txt.includes(targetFirst)) return true;
@@ -729,21 +743,21 @@ function findActiveChatWindow(targetName = '') {
     return false;
   });
 
-  for (const recipientEl of allPotentialRecipients) {
-    let curr = recipientEl;
-    for (let depth = 0; depth < 10 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
-      const editor = curr.querySelector('form [contenteditable="true"], form div[role="textbox"], form textarea, [contenteditable="true"], div[role="textbox"], textarea');
+  for (const matchEl of nonCardMatches) {
+    let curr = matchEl;
+    for (let depth = 0; depth < 12 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
+      const editor = findEditorInsideWindow(curr);
       const hasSend = curr.querySelector('button[type="submit"], button.msg-form__send-btn, button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[data-control-name="send"]') ||
                       Array.from(curr.querySelectorAll('button')).some(b => (b.innerText || b.textContent || '').trim().toLowerCase() === 'send');
 
       if (editor && hasSend) {
-        console.log(`[LAW] LCA Match: found chat window for "${targetName}" from recipient element!`);
+        console.log(`[LAW] Stage 1 Match: found chat window for "${targetName}" with editor and send button!`);
         return { textbox: editor, container: curr };
       }
 
       if (curr.parentElement === document.body || curr.parentElement?.tagName === 'ASIDE' || curr.parentElement?.classList?.contains('msg-overlay-container')) {
         if (editor) {
-          console.log(`[LAW] LCA Overlay Match: found chat bubble for "${targetName}"!`);
+          console.log(`[LAW] Stage 1 Overlay Match: found chat bubble for "${targetName}"!`);
           return { textbox: editor, container: curr };
         }
       }
@@ -752,7 +766,7 @@ function findActiveChatWindow(targetName = '') {
     }
   }
 
-  // APPROACH 2: Find all send buttons and ascend to find targetName
+  // STAGE 2: Search from all Send buttons and ascend to find targetName
   const allSendBtns = Array.from(document.querySelectorAll([
     'button[type="submit"]',
     'button.msg-form__send-btn',
@@ -780,9 +794,9 @@ function findActiveChatWindow(targetName = '') {
       const hasFull = targetFull && text.includes(targetFull);
 
       if (hasFirst || hasFull) {
-        const editor = curr.querySelector('form [contenteditable="true"], form div[role="textbox"], form textarea, [contenteditable="true"], div[role="textbox"], textarea');
+        const editor = findEditorInsideWindow(curr);
         if (editor) {
-          console.log(`[LAW] SendBtn Ascend Match: locked window for "${targetName}"!`);
+          console.log(`[LAW] Stage 2 Match: locked window for "${targetName}" via send button!`);
           return { textbox: editor, container: curr };
         }
       }
@@ -795,7 +809,7 @@ function findActiveChatWindow(targetName = '') {
     }
   }
 
-  // APPROACH 3: If only 1 send button is active on the page, accept it directly!
+  // STAGE 3: If only 1 send button exists on the entire page, accept it directly!
   if (allSendBtns.length === 1) {
     const sendBtn = allSendBtns[0];
     let curr = sendBtn;
@@ -811,10 +825,40 @@ function findActiveChatWindow(targetName = '') {
       curr = curr.parentElement;
     }
     const win = windowContainer || sendBtn.closest('form')?.parentElement || sendBtn.closest('form') || sendBtn.parentElement;
-    const editor = win.querySelector('form [contenteditable="true"], form div[role="textbox"], form textarea, [contenteditable="true"], div[role="textbox"], textarea');
+    const editor = findEditorInsideWindow(win);
     if (editor) {
-      console.log(`[LAW] Single active send button accepted for "${targetName}".`);
+      console.log(`[LAW] Stage 3 Match: single active send button accepted for "${targetName}".`);
       return { textbox: editor, container: win };
+    }
+  }
+
+  // STAGE 4: Direct scan for any active chat bubble in the messaging overlay
+  const bubbles = Array.from(document.querySelectorAll([
+    'aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)',
+    '.msg-overlay-conversation-bubble',
+    '.msg-overlay-compose-bubble',
+    'div[role="dialog"]',
+    '.artdeco-modal'
+  ].join(','))).filter(b => !b.closest('#law-floating-hud, header, nav, #global-nav, .global-nav') && !b.classList.contains('msg-overlay-list-bubble'));
+
+  for (const b of bubbles) {
+    const bText = (b.innerText || b.textContent || '').toLowerCase();
+    if ((targetFirst && targetFirst !== 'there' && bText.includes(targetFirst)) || (targetFull && bText.includes(targetFull))) {
+      const editor = findEditorInsideWindow(b);
+      if (editor) {
+        console.log(`[LAW] Stage 4 Match: locked window for "${targetName}" via bubble content!`);
+        return { textbox: editor, container: b };
+      }
+    }
+  }
+
+  // If only 1 bubble exists in the messaging dock
+  if (bubbles.length === 1) {
+    const b = bubbles[0];
+    const editor = findEditorInsideWindow(b);
+    if (editor) {
+      console.log(`[LAW] Stage 4 Single Bubble Fallback accepted for "${targetName}".`);
+      return { textbox: editor, container: b };
     }
   }
 
