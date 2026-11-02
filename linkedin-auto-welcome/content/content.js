@@ -690,49 +690,82 @@ function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // 1. Check all open chat bubbles in messaging overlay
-  const bubbles = Array.from(document.querySelectorAll([
-    'aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)',
-    '.msg-overlay-conversation-bubble',
-    '.msg-overlay-compose-bubble',
-    'aside > div:not(.msg-overlay-list-bubble)',
-    'div[role="dialog"]',
-    '.artdeco-modal'
-  ].join(','))).filter(b => !b.closest('#law-floating-hud, header, nav, #global-nav, .global-nav') && !b.classList.contains('msg-overlay-list-bubble'));
+  // Helper: get the message editor strictly from inside a form (never the typeahead input)
+  function getMessageEditor(root) {
+    // Priority 1: element with class msg-form__contenteditable
+    let ed = root.querySelector('div.msg-form__contenteditable[contenteditable="true"]');
+    if (ed) return ed;
+    // Priority 2: contenteditable inside the msg-form element
+    ed = root.querySelector('.msg-form [contenteditable="true"]');
+    if (ed) return ed;
+    // Priority 3: contenteditable inside a form
+    ed = root.querySelector('form [contenteditable="true"]');
+    if (ed) return ed;
+    // Priority 4: textarea
+    ed = root.querySelector('form textarea, textarea.msg-form__textarea');
+    if (ed) return ed;
+    return null;
+  }
 
+  // Collect all candidate compose bubbles (not the list dock, not the HUD)
+  const bubbles = Array.from(new Set([
+    ...document.querySelectorAll('aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)'),
+    ...document.querySelectorAll('.msg-overlay-conversation-bubble'),
+    ...document.querySelectorAll('.msg-overlay-compose-bubble'),
+    ...document.querySelectorAll('aside > div:not(.msg-overlay-list-bubble)'),
+    ...document.querySelectorAll('div[role="dialog"]'),
+    ...document.querySelectorAll('.artdeco-modal')
+  ])).filter(b =>
+    !b.closest('#law-floating-hud, #global-nav, .global-nav, nav') &&
+    !b.classList.contains('msg-overlay-list-bubble')
+  );
+
+  // PASS 1: strict name match via pill text (most reliable — pill is always rendered)
   for (const b of bubbles) {
-    const bText = (b.innerText || b.textContent || '').toLowerCase();
-    const matchesTarget = (targetFirst && targetFirst !== 'there' && bText.includes(targetFirst)) || (targetFull && bText.includes(targetFull));
-    if (matchesTarget) {
-      const editor = b.querySelector('div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], [contenteditable="true"], textarea.msg-form__textarea, textarea');
-      if (editor) {
-        console.log(`[LAW] Locked active chat for "${targetName}" via bubble content!`);
-        return { textbox: editor, container: b };
+    const pills = b.querySelectorAll('[class*="pill"], .artdeco-pill, .msg-connections-typeahead__pill');
+    for (const pill of pills) {
+      const pText = (pill.innerText || pill.textContent || '').toLowerCase();
+      if (
+        (targetFirst && targetFirst !== 'there' && pText.includes(targetFirst)) ||
+        (targetFull && pText.includes(targetFull))
+      ) {
+        const ed = getMessageEditor(b);
+        if (ed) {
+          console.log(`[LAW] Locked active chat for "${targetName}" via pill inside bubble!`);
+          return { textbox: ed, container: b };
+        }
       }
     }
   }
 
-  // 2. Check from recipient pills outside the main list
-  const pills = Array.from(document.querySelectorAll([
-    'aside [class*="pill"]',
-    'aside .artdeco-pill',
-    'aside .msg-connections-typeahead',
-    'aside .msg-entity-lockup',
-    '[role="dialog"] [class*="pill"]',
-    '[role="dialog"] .artdeco-pill'
-  ].join(','))).filter(p => !p.closest('.mn-connection-card, [class*="connection-card"], li.artdeco-list__item, main, #main, .scaffold-layout__main'));
-
-  for (const pill of pills) {
-    const pText = (pill.innerText || pill.textContent || '').toLowerCase();
-    if ((targetFirst && targetFirst !== 'there' && pText.includes(targetFirst)) || (targetFull && pText.includes(targetFull))) {
-      const win = findEnclosingWindow(pill);
-      if (win) {
-        const editor = win.querySelector('div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], [contenteditable="true"], textarea.msg-form__textarea, textarea');
-        if (editor) {
-          console.log(`[LAW] Locked active chat for "${targetName}" via pill!`);
-          return { textbox: editor, container: win };
-        }
+  // PASS 2: bubble innerText match (pill may not yet exist in DOM)
+  for (const b of bubbles) {
+    const bText = (b.innerText || b.textContent || '').toLowerCase();
+    const matchesTarget =
+      (targetFirst && targetFirst !== 'there' && bText.includes(targetFirst)) ||
+      (targetFull && bText.includes(targetFull));
+    if (matchesTarget) {
+      const ed = getMessageEditor(b);
+      if (ed) {
+        console.log(`[LAW] Locked active chat for "${targetName}" via bubble innerText!`);
+        return { textbox: ed, container: b };
       }
+    }
+  }
+
+  // PASS 3: single open compose window with an editor (no ambiguity)
+  const composeBubbles = bubbles.filter(b => {
+    const h2 = b.querySelector('h2, header');
+    const hasHeader = h2 && (h2.innerText || '').toLowerCase().includes('message');
+    const hasEditor = !!getMessageEditor(b);
+    return hasEditor && hasHeader;
+  });
+  if (composeBubbles.length === 1) {
+    const b = composeBubbles[0];
+    const ed = getMessageEditor(b);
+    if (ed) {
+      console.log(`[LAW] Single open compose window assumed for "${targetName}".`);
+      return { textbox: ed, container: b };
     }
   }
 
@@ -768,70 +801,82 @@ async function typeIntoReactInput(element, text, container) {
 
   try {
     try { element.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (e) {}
-    element.focus();
-    element.click();
-    await sleep(200);
 
     // If native textarea or input
     if (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT') {
+      element.focus();
+      element.click();
+      await sleep(100);
       element.value = text;
       element.dispatchEvent(new Event('input', { bubbles: true }));
       element.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
 
-    // Target the contenteditable container
-    const target = element.getAttribute('contenteditable') === 'true' 
-      ? element 
+    // Target the contenteditable div (the message editor, not typeahead)
+    const target = element.getAttribute('contenteditable') === 'true'
+      ? element
       : (element.querySelector('[contenteditable="true"]') || element);
 
     target.focus();
+    await sleep(150);
     target.click();
     await sleep(150);
 
-    // Select text area
-    const sel = window.getSelection();
-    if (sel) {
-      sel.removeAllRanges();
-      const range = document.createRange();
-      range.selectNodeContents(target);
-      sel.addRange(range);
-    }
-
-    // Method A: Native insertText command
+    // ── Method A: execCommand insertText (works on Chrome, respects Draft.js) ──
+    // First: select all existing content so insertText replaces it cleanly
     try {
-      document.execCommand('insertText', false, text);
+      document.execCommand('selectAll', false, null);
+      await sleep(50);
+      const didInsert = document.execCommand('insertText', false, text);
+      if (didInsert) {
+        console.log('[LAW] Method A (execCommand insertText) succeeded');
+        // Nudge React state with a no-op space so Send button enables
+        await sleep(100);
+        document.execCommand('insertText', false, ' ');
+        await sleep(30);
+        document.execCommand('insertText', false, '\b'); // backspace char fallback
+        // Actually just dispatch input event to wake up React
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      }
     } catch (e) {}
 
-    // Method B: Synthetic Clipboard Paste (Draft.js onPaste handler)
+    // ── Method B: Clipboard paste (Draft.js handles paste events natively) ──
     try {
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
+      dt.setData('text/html', '<p>' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</p>');
+      // Select all first so paste replaces
+      document.execCommand('selectAll', false, null);
+      await sleep(50);
       const pasteEvt = new ClipboardEvent('paste', {
         clipboardData: dt,
         bubbles: true,
         cancelable: true,
         composed: true
       });
-      target.dispatchEvent(pasteEvt);
-    } catch (e) {}
+      const handled = target.dispatchEvent(pasteEvt);
+      console.log('[LAW] Method B (clipboard paste) dispatched, handled:', handled);
+      await sleep(200);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (e) {
+      console.warn('[LAW] Method B error:', e);
+    }
 
-    // Method C: React InputEvents
-    target.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
-    target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-    target.dispatchEvent(new Event('input', { bubbles: true }));
-    target.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(150);
-
-    // Wake up React state: trigger Space + Backspace
+    // ── Method C: InputEvent (React synthetic event trigger) ──
     try {
-      document.execCommand('insertText', false, ' ');
-      await sleep(50);
-      document.execCommand('delete', false, null);
+      target.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: true, inputType: 'insertText', data: text
+      }));
+      target.dispatchEvent(new InputEvent('input', {
+        bubbles: true, inputType: 'insertText', data: text
+      }));
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
     } catch (e) {}
-    target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', code: 'Backspace', bubbles: true }));
-    await sleep(200);
 
+    await sleep(200);
     return true;
   } catch (err) {
     console.error('[LAW] typeIntoReactInput error:', err);
@@ -841,9 +886,10 @@ async function typeIntoReactInput(element, text, container) {
 
 // Find Send button strictly within the active conversation bubble / form
 function findSendButton(container, textBox) {
-  const root = container || (textBox ? textBox.closest('.msg-overlay-conversation-bubble, [role="dialog"], aside > div') : null);
+  const root = container || (textBox ? textBox.closest('.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [role="dialog"], aside > div') : null);
   if (!root) return null;
 
+  // Prefer submit button within the form
   const btn = root.querySelector([
     'button[type="submit"]',
     'button.msg-form__send-btn',
