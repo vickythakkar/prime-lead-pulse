@@ -690,97 +690,96 @@ function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // ── Bottom-up approach ────────────────────────────────────────────────────
-  // Step 1: Find ALL message editors on the page (inside any form or msg-form)
-  // Step 2: For each editor, walk UP the DOM to find its chat container
-  // Step 3: Check if that container mentions the target name
-  // This completely bypasses bubble container class assumptions.
+  // ── Scan ALL contenteditable elements on the page ────────────────────────
+  // LinkedIn frequently changes class names. We don't rely on specific classes.
+  // Instead: grab every [contenteditable="true"], filter to only message editors.
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Find message editors: contenteditable elements inside a form or msg-form container
-  // Explicitly exclude elements that are inside the messaging search/typeahead header
-  const allEditors = Array.from(document.querySelectorAll([
-    'div.msg-form__contenteditable[contenteditable="true"]',
-    '.msg-form [contenteditable="true"]:not([data-typeahead])',
-    'form [role="textbox"][contenteditable="true"]',
-    '[class*="msg-form"][contenteditable="true"]',
-    'textarea.msg-form__textarea'
-  ].join(',')));
+  const allCE = Array.from(document.querySelectorAll('[contenteditable="true"]'));
 
-  // Filter out typeahead search inputs (they are in the header area, not a form)
-  const messageEditors = allEditors.filter(el => {
-    // Must NOT be inside the typeahead header search input area
-    if (el.closest('.msg-connections-typeahead__search-field, [data-typeahead="true"], .msg-form__hiddable-attach-container')) return false;
-    // Must NOT be a single-line input used for search
-    if (el.tagName === 'INPUT') return false;
-    // Should be inside some kind of overlay/compose container or modal
-    const inOverlay = el.closest('aside, [role="dialog"], .msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [class*="overlay"], [class*="compose"]');
-    if (!inOverlay) return false;
-    // Should NOT be inside the global nav or HUD
-    if (el.closest('#law-floating-hud, #global-nav, .global-nav, nav[aria-label]')) return false;
+  // Filter: keep only message box editors, not search/typeahead inputs
+  const messageEditors = allCE.filter(el => {
+    // Skip single-line inputs (typeahead search boxes are usually div with role=combobox)
+    const role = el.getAttribute('role') || '';
+    if (role === 'combobox' || role === 'searchbox') return false;
+    // Skip elements inside the HUD or global nav
+    if (el.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
+    // Skip elements visually inside the connections list (left sidebar)
+    if (el.closest('.mn-connection-card, [class*="connection-card"], .scaffold-layout__main > main')) return false;
+    // Skip elements that are ONLY inside a search field (typeahead for adding recipients)
+    // These are usually inside a header area with no submit button nearby
+    const nearForm = el.closest('form') || el.closest('[class*="form"]') || el.closest('[class*="composer"]') || el.closest('[class*="compose"]') || el.closest('[class*="message"]') || el.closest('[class*="msg"]');
+    const nearOverlay = el.closest('aside') || el.closest('[role="dialog"]') || el.closest('[class*="overlay"]') || el.closest('[class*="bubble"]');
+    if (!nearForm && !nearOverlay) return false;
+    // Must not be a tiny single-line typeahead (those are inside header/typeahead containers)
+    const inTypeahead = el.closest('[class*="typeahead"], [class*="search-field"], [class*="recipient"]');
+    if (inTypeahead) return false;
     return true;
   });
 
-  console.log(`[LAW] findActiveChatWindow: found ${messageEditors.length} candidate editors for "${targetName}"`);
+  console.log(`[LAW] findActiveChatWindow: ${allCE.length} total contenteditable, ${messageEditors.length} message editors, looking for "${targetName}"`);
 
-  // For each valid editor, find its enclosing chat container and verify name
+  // For each editor: walk UP to find the chat container, check for target name
   const candidates = [];
   for (const ed of messageEditors) {
-    // Walk up to find the chat bubble/dialog container
-    let container = ed.closest([
-      '.msg-overlay-conversation-bubble',
-      '.msg-overlay-compose-bubble',
-      '[role="dialog"]',
-      '.artdeco-modal',
-      'aside > div',
-      'aside > section'
-    ].join(','));
-
-    // If no match via closest, walk up manually until we hit aside or body
-    if (!container) {
-      let el = ed.parentElement;
-      while (el && el !== document.body) {
-        const isAside = el.parentElement && (el.parentElement.tagName === 'ASIDE' || el.parentElement.classList.contains('msg-overlay-container'));
-        if (isAside) { container = el; break; }
-        if (el.getAttribute('role') === 'dialog') { container = el; break; }
-        el = el.parentElement;
+    // Walk up from the editor to find a meaningful container
+    let container = null;
+    let el = ed.parentElement;
+    let steps = 0;
+    while (el && el !== document.body && steps < 20) {
+      steps++;
+      // Stop at aside direct children, dialogs, or known LinkedIn overlay classes
+      const cls = (el.className || '').toLowerCase();
+      const tag = el.tagName;
+      const role = el.getAttribute('role') || '';
+      if (
+        role === 'dialog' ||
+        cls.includes('bubble') ||
+        cls.includes('compose') ||
+        cls.includes('overlay') ||
+        cls.includes('msg-overlay') ||
+        (tag === 'ASIDE') ||
+        (el.parentElement && el.parentElement.tagName === 'ASIDE')
+      ) {
+        container = el;
+        break;
       }
+      el = el.parentElement;
     }
-
-    if (!container) container = ed.closest('aside') || ed.parentElement;
-    if (!container || container.id === 'law-floating-hud') continue;
-
-    candidates.push({ ed, container });
+    // Fallback: use closest aside or the editor's 8th ancestor
+    if (!container) {
+      container = ed.closest('aside') || ed.parentElement?.parentElement?.parentElement?.parentElement?.parentElement?.parentElement?.parentElement?.parentElement || ed.parentElement;
+    }
+    if (container && container.id === 'law-floating-hud') continue;
+    candidates.push({ ed, container: container || ed.parentElement });
   }
 
-  console.log(`[LAW] findActiveChatWindow: ${candidates.length} container-editor pairs found`);
+  console.log(`[LAW] findActiveChatWindow: ${candidates.length} editor-container pairs`);
 
-  // PASS 1: Match by name (pill text or container text)
+  // PASS 1: name match
   for (const { ed, container } of candidates) {
     const cText = (container.innerText || container.textContent || '').toLowerCase();
     const nameMatch =
       (targetFirst && targetFirst !== 'there' && cText.includes(targetFirst)) ||
       (targetFull && cText.includes(targetFull));
-
     if (nameMatch) {
-      console.log(`[LAW] Locked active chat for "${targetName}" via container text!`);
+      console.log(`[LAW] Locked chat for "${targetName}" via name match! Editor: ${ed.tagName} ${ed.className?.slice(0,40)}`);
       return { textbox: ed, container };
     }
   }
 
-  // PASS 2: Single compose window with no name ambiguity — accept it
+  // PASS 2: single editor — no ambiguity
   if (candidates.length === 1) {
     const { ed, container } = candidates[0];
-    console.log(`[LAW] Single compose editor found, assuming it's for "${targetName}"`);
+    console.log(`[LAW] Single editor found, assuming "${targetName}". Editor: ${ed.tagName} ${ed.className?.slice(0,40)}`);
     return { textbox: ed, container };
   }
 
-  // PASS 3: Multiple editors — take first one that has a "New message" title (fresh compose)
+  // PASS 3: multiple editors — take the one whose container has a "New message" or similar title
   for (const { ed, container } of candidates) {
-    const title = (container.querySelector('h2, [class*="header"] h1, [class*="header"] h2, header') || {});
-    const titleText = (title.innerText || title.textContent || '').toLowerCase();
-    if (titleText.includes('new message') || titleText.includes('message')) {
-      console.log(`[LAW] Matched by "New message" title for "${targetName}"`);
+    const cText = (container.innerText || container.textContent || '').toLowerCase();
+    if (cText.includes('new message') || cText.includes('write a message') || cText.includes('type a message')) {
+      console.log(`[LAW] Matched by compose title for "${targetName}"`);
       return { textbox: ed, container };
     }
   }
