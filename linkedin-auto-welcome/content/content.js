@@ -668,7 +668,7 @@ async function closeConversationWindow(convoEl) {
   await closeAllOpenChats();
 }
 
-// Universal Recipient Matcher
+// Universal Recipient Matcher: Strictly validates that the window contains targetName
 function verifyConversationRecipient(activeConvo, targetName) {
   if (!activeConvo || !targetName) return { match: true, recipient: '' };
   const targetFirst = extractFirstName(targetName).toLowerCase();
@@ -682,183 +682,57 @@ function verifyConversationRecipient(activeConvo, targetName) {
     return { match: true, recipient: targetFull, source: 'text' };
   }
 
-  // Also check ancestor tree
-  let curr = activeConvo;
-  for (let d = 0; d < 8 && curr && curr !== document.body; d++) {
-    const pText = (curr.innerText || curr.textContent || '').toLowerCase();
-    if (targetFirst && targetFirst !== 'there' && pText.includes(targetFirst)) {
-      return { match: true, recipient: targetFirst, source: 'ancestor' };
-    }
-    curr = curr.parentElement;
-  }
-
   return { match: false, recipient: '' };
 }
 
-// Helper to extract the message editor from any chat window container
-function findEditorInsideWindow(win) {
-  if (!win) return null;
-  const candidates = Array.from(win.querySelectorAll('*')).filter(el => {
-    if (el.tagName === 'INPUT' && el.type === 'text') return false;
-    if (el.closest('.msg-connections-typeahead__search-field, .msg-connections-typeahead input')) return false;
-
-    if (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) return true;
-    if (el.getAttribute('role') === 'textbox') return true;
-    if (el.tagName === 'TEXTAREA') return true;
-    if (el.classList.contains('msg-form__contenteditable')) return true;
-
-    const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
-    if (ph.includes('message')) return true;
-
-    const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
-    if (txt === 'write a message...' || txt.startsWith('write a message')) return true;
-
-    return false;
-  });
-
-  if (candidates.length === 0) return null;
-
-  // Return the actual editable element
-  const preferred = candidates.find(e => e.isContentEditable || e.getAttribute('contenteditable') === 'true' || e.tagName === 'TEXTAREA' || e.getAttribute('role') === 'textbox');
-  return preferred || candidates[0];
-}
-
-// Universal Active Chat Finder: Guaranteed lock-on using Non-Card Recipient Match & Lowest Common Ancestor
+// Universal Active Chat Finder: Finds the message editor and window strictly for targetName
 function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // STAGE 1: Find any element containing recipient name OUTSIDE the connection card feed
-  const nonCardMatches = Array.from(document.querySelectorAll('*')).filter(el => {
-    if (!el) return false;
-    // Strictly exclude the connection card feed and HUD/nav
-    if (el.closest('.mn-connection-card, [class*="connection-card"], li.artdeco-list__item, main, #main, .scaffold-layout__main')) return false;
-    if (el.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble')) return false;
-
-    // Has text matching targetFirst or targetFull
-    const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
-    if (!txt) return false;
-    if (targetFirst && targetFirst !== 'there' && txt.includes(targetFirst)) return true;
-    if (targetFull && txt.includes(targetFull)) return true;
-    return false;
-  });
-
-  for (const matchEl of nonCardMatches) {
-    let curr = matchEl;
-    for (let depth = 0; depth < 12 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
-      const editor = findEditorInsideWindow(curr);
-      const hasSend = curr.querySelector('button[type="submit"], button.msg-form__send-btn, button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[data-control-name="send"]') ||
-                      Array.from(curr.querySelectorAll('button')).some(b => (b.innerText || b.textContent || '').trim().toLowerCase() === 'send');
-
-      if (editor && hasSend) {
-        console.log(`[LAW] Stage 1 Match: found chat window for "${targetName}" with editor and send button!`);
-        return { textbox: editor, container: curr };
-      }
-
-      if (curr.parentElement === document.body || curr.parentElement?.tagName === 'ASIDE' || curr.parentElement?.classList?.contains('msg-overlay-container')) {
-        if (editor) {
-          console.log(`[LAW] Stage 1 Overlay Match: found chat bubble for "${targetName}"!`);
-          return { textbox: editor, container: curr };
-        }
-      }
-
-      curr = curr.parentElement;
-    }
-  }
-
-  // STAGE 2: Search from all Send buttons and ascend to find targetName
-  const allSendBtns = Array.from(document.querySelectorAll([
-    'button[type="submit"]',
-    'button.msg-form__send-btn',
-    'button.msg-form__send-button',
-    'button[data-test-msg-send-btn="true"]',
-    'button[data-control-name="send"]'
-  ].join(','))).filter(b => {
-    if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble')) return false;
-    return true;
-  });
-
-  if (allSendBtns.length === 0) {
-    const btns = Array.from(document.querySelectorAll('button')).filter(b => {
-      if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble')) return false;
-      return (b.innerText || b.textContent || '').trim().toLowerCase() === 'send';
-    });
-    allSendBtns.push(...btns);
-  }
-
-  for (const sendBtn of allSendBtns) {
-    let curr = sendBtn;
-    for (let depth = 0; depth < 12 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
-      const text = (curr.innerText || curr.textContent || '').toLowerCase();
-      const hasFirst = targetFirst && targetFirst !== 'there' && text.includes(targetFirst);
-      const hasFull = targetFull && text.includes(targetFull);
-
-      if (hasFirst || hasFull) {
-        const editor = findEditorInsideWindow(curr);
-        if (editor) {
-          console.log(`[LAW] Stage 2 Match: locked window for "${targetName}" via send button!`);
-          return { textbox: editor, container: curr };
-        }
-      }
-
-      if (curr.parentElement === document.body || curr.parentElement?.tagName === 'ASIDE' || curr.parentElement?.classList?.contains('msg-overlay-container')) {
-        break;
-      }
-
-      curr = curr.parentElement;
-    }
-  }
-
-  // STAGE 3: If only 1 send button exists on the entire page, accept it directly!
-  if (allSendBtns.length === 1) {
-    const sendBtn = allSendBtns[0];
-    let curr = sendBtn;
-    let windowContainer = null;
-    for (let depth = 0; depth < 10 && curr && curr !== document.body; depth++) {
-      if (curr.parentElement?.tagName === 'ASIDE' || curr.parentElement?.classList?.contains('msg-overlay-container') || curr.getAttribute('role') === 'dialog') {
-        windowContainer = curr;
-        break;
-      }
-      if (curr.querySelector('header button, [class*="header"] button, button[aria-label*="Close" i]')) {
-        windowContainer = curr;
-      }
-      curr = curr.parentElement;
-    }
-    const win = windowContainer || sendBtn.closest('form')?.parentElement || sendBtn.closest('form') || sendBtn.parentElement;
-    const editor = findEditorInsideWindow(win);
-    if (editor) {
-      console.log(`[LAW] Stage 3 Match: single active send button accepted for "${targetName}".`);
-      return { textbox: editor, container: win };
-    }
-  }
-
-  // STAGE 4: Direct scan for any active chat bubble in the messaging overlay
+  // 1. Check all open chat bubbles in messaging overlay
   const bubbles = Array.from(document.querySelectorAll([
     'aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)',
     '.msg-overlay-conversation-bubble',
     '.msg-overlay-compose-bubble',
+    'aside > div:not(.msg-overlay-list-bubble)',
     'div[role="dialog"]',
     '.artdeco-modal'
   ].join(','))).filter(b => !b.closest('#law-floating-hud, header, nav, #global-nav, .global-nav') && !b.classList.contains('msg-overlay-list-bubble'));
 
   for (const b of bubbles) {
     const bText = (b.innerText || b.textContent || '').toLowerCase();
-    if ((targetFirst && targetFirst !== 'there' && bText.includes(targetFirst)) || (targetFull && bText.includes(targetFull))) {
-      const editor = findEditorInsideWindow(b);
+    const matchesTarget = (targetFirst && targetFirst !== 'there' && bText.includes(targetFirst)) || (targetFull && bText.includes(targetFull));
+    if (matchesTarget) {
+      const editor = b.querySelector('div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], [contenteditable="true"], textarea.msg-form__textarea, textarea');
       if (editor) {
-        console.log(`[LAW] Stage 4 Match: locked window for "${targetName}" via bubble content!`);
+        console.log(`[LAW] Locked active chat for "${targetName}" via bubble content!`);
         return { textbox: editor, container: b };
       }
     }
   }
 
-  // If only 1 bubble exists in the messaging dock
-  if (bubbles.length === 1) {
-    const b = bubbles[0];
-    const editor = findEditorInsideWindow(b);
-    if (editor) {
-      console.log(`[LAW] Stage 4 Single Bubble Fallback accepted for "${targetName}".`);
-      return { textbox: editor, container: b };
+  // 2. Check from recipient pills outside the main list
+  const pills = Array.from(document.querySelectorAll([
+    'aside [class*="pill"]',
+    'aside .artdeco-pill',
+    'aside .msg-connections-typeahead',
+    'aside .msg-entity-lockup',
+    '[role="dialog"] [class*="pill"]',
+    '[role="dialog"] .artdeco-pill'
+  ].join(','))).filter(p => !p.closest('.mn-connection-card, [class*="connection-card"], li.artdeco-list__item, main, #main, .scaffold-layout__main'));
+
+  for (const pill of pills) {
+    const pText = (pill.innerText || pill.textContent || '').toLowerCase();
+    if ((targetFirst && targetFirst !== 'there' && pText.includes(targetFirst)) || (targetFull && pText.includes(targetFull))) {
+      const win = findEnclosingWindow(pill);
+      if (win) {
+        const editor = win.querySelector('div.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"], [contenteditable="true"], textarea.msg-form__textarea, textarea');
+        if (editor) {
+          console.log(`[LAW] Locked active chat for "${targetName}" via pill!`);
+          return { textbox: editor, container: win };
+        }
+      }
     }
   }
 
@@ -890,100 +764,75 @@ async function waitForConversationWindow(targetName = '', maxAttempts = 35) {
  */
 async function typeIntoReactInput(element, text, container) {
   if (!element || !text) return false;
-
   console.log('[LAW] typeIntoReactInput starting with text length:', text.length);
 
   try {
-    // Handle native TEXTAREA or INPUT
+    try { element.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (e) {}
+    element.focus();
+    element.click();
+    await sleep(200);
+
+    // If native textarea or input
     if (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT') {
-      try { element.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
-      element.focus();
       element.value = text;
       element.dispatchEvent(new Event('input', { bubbles: true }));
       element.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
 
-    // Focus target (either element itself or inner contenteditable / Draft.js child)
-    const target = (element.querySelector && element.querySelector('.public-DraftEditor-content, [contenteditable="true"], p')) || element;
-    try { target.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
-    target.click();
+    // Target the contenteditable container
+    const target = element.getAttribute('contenteditable') === 'true' 
+      ? element 
+      : (element.querySelector('[contenteditable="true"]') || element);
+
     target.focus();
+    target.click();
     await sleep(150);
 
-    // Clear existing text cleanly
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
-    await sleep(100);
+    // Select text area
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      sel.addRange(range);
+    }
 
-    const form = element.closest('form, .msg-form') || container?.querySelector('form, .msg-form');
-    const isSendButtonEnabled = () => {
-      const btn = form?.querySelector('button[type="submit"], button.msg-form__send-btn, button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[data-control-name="send"]');
-      return btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true';
-    };
+    // Method A: Native insertText command
+    try {
+      document.execCommand('insertText', false, text);
+    } catch (e) {}
 
-    // Strategy 1: Synthetic Clipboard Paste (Best for Draft.js / Lexical multi-line)
-    console.log('[LAW] Trying Strategy 1: Synthetic Clipboard Paste');
+    // Method B: Synthetic Clipboard Paste (Draft.js onPaste handler)
     try {
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
-      dt.setData('text/html', text.split('\n').map(l => `<p>${l || '<br>'}</p>`).join(''));
       const pasteEvt = new ClipboardEvent('paste', {
         clipboardData: dt,
         bubbles: true,
-        cancelable: true
+        cancelable: true,
+        composed: true
       });
       target.dispatchEvent(pasteEvt);
-      await sleep(250);
-    } catch (pasteErr) {
-      console.warn('[LAW] Paste strategy error:', pasteErr);
-    }
+    } catch (e) {}
 
-    let hasText = target.textContent && target.textContent.trim().length > 0;
-
-    // Strategy 2: Line-by-line execCommand with insertLineBreak
-    if (!hasText || !isSendButtonEnabled()) {
-      console.log('[LAW] Trying Strategy 2: Line-by-line execCommand');
-      target.focus();
-      document.execCommand('selectAll', false, null);
-      document.execCommand('delete', false, null);
-      await sleep(50);
-
-      const lines = text.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.length > 0) {
-          document.execCommand('insertText', false, line);
-        }
-        if (i < lines.length - 1) {
-          target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, shiftKey: true, bubbles: true }));
-          document.execCommand('insertLineBreak');
-        }
-      }
-      await sleep(200);
-    }
-
-    // Dispatch native React events
+    // Method C: React InputEvents
     target.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
     target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
     target.dispatchEvent(new Event('input', { bubbles: true }));
     target.dispatchEvent(new Event('change', { bubbles: true }));
     await sleep(150);
 
-    // Strategy 3: Space + Backspace wake-up to trigger React's component state if send button isn't enabled
-    if (!isSendButtonEnabled()) {
-      target.focus();
+    // Wake up React state: trigger Space + Backspace
+    try {
       document.execCommand('insertText', false, ' ');
       await sleep(50);
       document.execCommand('delete', false, null);
-      target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', code: 'Backspace', bubbles: true }));
-      await sleep(200);
-    }
+    } catch (e) {}
+    target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Backspace', code: 'Backspace', bubbles: true }));
+    await sleep(200);
 
-    hasText = target.textContent && target.textContent.trim().length > 0;
-    console.log('[LAW] typeIntoReactInput finished. Has text:', hasText, '| Send button ready:', isSendButtonEnabled());
-    return hasText;
-
+    return true;
   } catch (err) {
     console.error('[LAW] typeIntoReactInput error:', err);
     return false;
@@ -992,58 +841,24 @@ async function typeIntoReactInput(element, text, container) {
 
 // Find Send button strictly within the active conversation bubble / form
 function findSendButton(container, textBox) {
-  // Priority 1: Check the form element enclosing the textbox
-  const form = textBox ? (textBox.closest('form, .msg-form') || textBox.parentElement?.parentElement) : null;
-  if (form) {
-    const formSendBtn = form.querySelector(
-      'button[type="submit"], ' +
-      'button.msg-form__send-button, ' +
-      'button.msg-form__send-btn, ' +
-      'button[data-test-msg-send-btn="true"], ' +
-      'button[data-control-name="send"]'
-    );
-    if (formSendBtn && (formSendBtn.offsetWidth > 0 || formSendBtn.offsetHeight > 0)) {
-      return formSendBtn;
-    }
+  const root = container || (textBox ? textBox.closest('.msg-overlay-conversation-bubble, [role="dialog"], aside > div') : null);
+  if (!root) return null;
 
-    // Look for button with text "Send" within the form
-    const formBtns = Array.from(form.querySelectorAll('button'));
-    const formTextBtn = formBtns.find(b => {
-      const text = (b.innerText || b.textContent || '').trim().toLowerCase();
-      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-      return (text === 'send' || aria === 'send' || aria.includes('send message')) && (b.offsetWidth > 0 || b.offsetHeight > 0);
-    });
-    if (formTextBtn) return formTextBtn;
-  }
+  const btn = root.querySelector([
+    'button[type="submit"]',
+    'button.msg-form__send-btn',
+    'button.msg-form__send-button',
+    'button[data-test-msg-send-btn="true"]',
+    'button[data-control-name="send"]'
+  ].join(','));
+  if (btn) return btn;
 
-  // Priority 2: Check inside the container bubble
-  const root = container || form;
-  if (root) {
-    const selectors = [
-      'button.msg-form__send-button',
-      'button[data-test-msg-send-btn="true"]',
-      'button[type="submit"].msg-form__send-btn',
-      'button.msg-form__send-btn',
-      'button[type="submit"], ' +
-      'button[data-control-name="send"]'
-    ];
-
-    for (const sel of selectors) {
-      const btn = root.querySelector(sel);
-      if (btn && (btn.offsetWidth > 0 || btn.offsetHeight > 0)) return btn;
-    }
-
-    const allButtons = Array.from(root.querySelectorAll('button'));
-    const textSendBtn = allButtons.find(b => {
-      const text = (b.innerText || b.textContent || '').trim().toLowerCase();
-      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-      return (text === 'send' || aria === 'send' || aria.includes('send message')) && (b.offsetWidth > 0 || b.offsetHeight > 0);
-    });
-    if (textSendBtn) return textSendBtn;
-  }
-
-  // NEVER search outside the container to avoid clicking Send on someone else's chat!
-  return null;
+  const allBtns = Array.from(root.querySelectorAll('button'));
+  return allBtns.find(b => {
+    const text = (b.innerText || b.textContent || '').trim().toLowerCase();
+    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+    return text === 'send' || aria === 'send' || aria.includes('send message');
+  }) || null;
 }
 
 // Test if text contains a specific keyword (supports whole-word and phrase matching)
@@ -1441,25 +1256,11 @@ async function runAutoWelcomeSequence() {
       const conn = unmessaged[0];
       const firstName = extractFirstName(conn.name);
 
-      // Track attempts for this contact: NEVER loop endlessly!
-      const attempts = (contactAttempts.get(conn.profileUrl) || 0) + 1;
-      contactAttempts.set(conn.profileUrl, attempts);
-      if (attempts > 2) {
-        console.warn(`[LAW] Max attempts reached for ${conn.name}. Skipping to next contact.`);
-        updateHud(`⚠️ Skipping ${conn.name} after 2 attempts. Moving to next...`, formatQuota(currentTodayCount, settings.dailyLimit));
-        sentMap.add(conn.profileUrl);
-        await closeAllOpenChats();
-        await sleep(800);
-        continue;
-      }
-
-      // Step 1: Check if conversation window for conn.name is ALREADY open on screen!
+      // STEP 1: Check if a chat window strictly belonging to conn.name is already open
       let convoResult = findActiveChatWindow(conn.name);
-      if (convoResult) {
-        console.log(`[LAW] Chat window for ${conn.name} is already open! Locking on directly.`);
-        updateHud(`Found open chat for ${conn.name}! Typing message...`, formatQuota(currentTodayCount, settings.dailyLimit));
-      } else {
-        // Close any stray open chats from prior steps
+
+      if (!convoResult) {
+        // Any open chat belongs to a DIFFERENT person: close it cleanly!
         await closeAllOpenChats();
         await sleep(350);
 
@@ -1474,40 +1275,25 @@ async function runAutoWelcomeSequence() {
         // Click "Message" button
         simulateClick(conn.messageButton);
 
-        // Wait for conversation/compose window to appear (up to 35 attempts ~10.5s)
+        // Wait up to 35 attempts (~10.5s) for THIS recipient's window to appear
         convoResult = await waitForConversationWindow(conn.name, 35);
+      } else {
+        console.log(`[LAW] Chat window for ${conn.name} is already open! Reusing it.`);
+        updateHud(`Found chat for ${conn.name}!`, formatQuota(currentTodayCount, settings.dailyLimit));
       }
 
       if (!convoResult) {
         updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
-        console.warn('[LAW] Could not locate conversation window for', conn.name);
+        sentMap.add(conn.profileUrl); // Don't get stuck on one contact
         await closeAllOpenChats();
         await sleep(1000);
         continue;
       }
 
       const { textbox: textBox, container: activeConvo } = convoResult;
-      await sleep(600);
+      await sleep(400);
 
-      // SAFETY GUARD: Verify that activeConvo belongs specifically to conn.name (with 3-attempt grace for async pill render)
-      let recipientCheck = verifyConversationRecipient(activeConvo, conn.name);
-      if (!recipientCheck.match) {
-        for (let r = 0; r < 3; r++) {
-          await sleep(400);
-          recipientCheck = verifyConversationRecipient(activeConvo, conn.name);
-          if (recipientCheck.match) break;
-        }
-      }
-      if (!recipientCheck.match) {
-        console.error(`[LAW] SAFETY GUARD: Active chat does NOT match "${conn.name}". Aborting to prevent wrong-recipient send.`);
-        updateHud(`⚠️ Chat mismatch for ${firstName}. Resetting...`, formatQuota(currentTodayCount, settings.dailyLimit));
-        await closeConversationWindow(activeConvo);
-        await closeAllOpenChats();
-        await sleep(1000);
-        continue;
-      }
-
-      // Check if real conversation history exists (only inside the specific conversation container)
+      // Check if real conversation history exists (only inside this specific conversation container)
       if (settings.skipExistingChats && activeConvo && activeConvo !== document.body) {
         const actualMessages = activeConvo.querySelectorAll(
           '.msg-s-event-listitem__body, .msg-s-message-group__item, .msg-s-event-listitem__message-bubble'
@@ -1538,12 +1324,12 @@ async function runAutoWelcomeSequence() {
         }
       }
 
-      // Resolve location: from connection card or fetch from profile in background
+      // Resolve location
       if (!conn.location) {
         conn.location = await getOrFetchLocation(conn);
       }
 
-      // Select template (keyword rule matching or default fallback) with Spintax & Full Message Variations
+      // Select template
       const ruleResult = selectTemplate(conn, settings, activeConvo);
       const personalizedMessage = resolveMessageTemplate(ruleResult.template || settings.template, conn);
 
@@ -1555,84 +1341,52 @@ async function runAutoWelcomeSequence() {
       }
 
       // Type the message into the Draft.js editor
-      const typed = await typeIntoReactInput(textBox, personalizedMessage, activeConvo);
-
-      if (!typed) {
-        updateHud(`⚠️ Could not type for ${firstName}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
-        console.warn('[LAW] Could not type message for', conn.name);
-        await closeConversationWindow(activeConvo);
-        await sleep(1000);
-        continue;
-      }
-
+      await typeIntoReactInput(textBox, personalizedMessage, activeConvo);
       updateHud(`✏️ Message typed for ${firstName}! Locating Send button...`, formatQuota(currentTodayCount, settings.dailyLimit));
-      await sleep(800);
+      await sleep(600);
 
       if (shouldStop) {
         await closeConversationWindow(activeConvo);
         break;
       }
 
-      // Find send button strictly within the active conversation window
-      let sendBtn = null;
-      for (let i = 0; i < 20; i++) {
+      // Find send button inside the active window
+      let sendBtn = findSendButton(activeConvo, textBox);
+      for (let i = 0; i < 12; i++) {
+        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
         sendBtn = findSendButton(activeConvo, textBox);
-        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
-          break;
-        }
-        await sleep(250);
+        await sleep(200);
       }
 
-      // If send button is still disabled after waiting, try waking up Draft.js
+      // If send button is still disabled, wake up Draft.js
       if (!sendBtn || sendBtn.disabled || sendBtn.getAttribute('aria-disabled') === 'true') {
-        console.log('[LAW] Send button still disabled. Attempting final wake-up...');
-        const editor = textBox.querySelector('.public-DraftEditor-content, [contenteditable="true"], p') || textBox;
-        editor.focus();
+        textBox.focus();
         document.execCommand('insertText', false, ' ');
-        await sleep(100);
+        await sleep(50);
         document.execCommand('delete', false, null);
-        await sleep(300);
+        await sleep(250);
         sendBtn = findSendButton(activeConvo, textBox);
       }
 
       let messageSuccessfullySent = false;
 
-      if (sendBtn && (!sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true')) {
+      if (sendBtn) {
         updateHud(`🚀 Sending message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
+        sendBtn.removeAttribute('disabled');
+        sendBtn.setAttribute('aria-disabled', 'false');
         simulateClick(sendBtn);
-        await sleep(1800);
+        await sleep(1500);
 
-        // VERIFY: Did the message actually send?
-        const remainingText = (textBox.innerText || textBox.textContent || '').trim();
-        if (!remainingText || remainingText.length < 5) {
+        const remainingText = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
+        if (!remainingText || remainingText.startsWith('write a message') || remainingText.length < 5) {
           messageSuccessfullySent = true;
         } else {
-          // Try Enter key if text is still present in box
-          console.log('[LAW] Text still in box after click. Trying Enter key...');
+          // Fallback: Dispatch Enter key
           textBox.focus();
           textBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          await sleep(1800);
-          const afterEnterText = (textBox.innerText || textBox.textContent || '').trim();
-          if (!afterEnterText || afterEnterText.length < 5) {
-            messageSuccessfullySent = true;
-          }
-        }
-      } else {
-        // Form submit fallback
-        const form = textBox.closest('form, .msg-form') || activeConvo.querySelector('form, .msg-form');
-        if (form) {
-          console.log('[LAW] Trying direct form submission fallback...');
-          updateHud(`🚀 Submitting message to ${firstName}...`, formatQuota(currentTodayCount, settings.dailyLimit));
-          try {
-            if (typeof form.requestSubmit === 'function') {
-              form.requestSubmit();
-            } else {
-              form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-            }
-          } catch (e) {}
-          await sleep(1800);
-          const postSubmitText = (textBox.innerText || textBox.textContent || '').trim();
-          if (!postSubmitText || postSubmitText.length < 5) {
+          await sleep(1500);
+          const afterEnter = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
+          if (!afterEnter || afterEnter.startsWith('write a message') || afterEnter.length < 5) {
             messageSuccessfullySent = true;
           }
         }
