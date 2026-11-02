@@ -690,25 +690,30 @@ function verifyConversationRecipient(activeConvo, targetName) {
 function findMessageEditorInContainer(container) {
   if (!container) return null;
 
-  // 1. Match by placeholder or aria-label containing "Write a message"
-  const writeMsg = container.querySelector(
-    '[aria-label*="Write a message" i], [data-placeholder*="Write a message" i], [placeholder*="Write a message" i]'
-  );
-  if (writeMsg) return writeMsg;
+  // 1. Match specific Draft.js and LinkedIn message editor elements
+  const primary = container.querySelector([
+    '.msg-form__contenteditable',
+    '.public-DraftEditor-content',
+    'div[role="textbox"][contenteditable]',
+    'div[contenteditable="true"]',
+    'div[contenteditable]',
+    '[aria-label*="Write a message" i]',
+    '[data-placeholder*="Write a message" i]',
+    'textarea.msg-form__textarea',
+    'textarea'
+  ].join(','));
 
-  // 2. Match standard LinkedIn message classes
-  const msgClassEl = container.querySelector(
-    '.msg-form__contenteditable, div[role="textbox"][contenteditable], [contenteditable][role="textbox"]'
-  );
-  if (msgClassEl) return msgClassEl;
+  // Ensure this editor is NOT inside the recipient typeahead search box
+  if (primary && !primary.closest('.msg-connections-typeahead, [class*="typeahead"], [role="combobox"], [role="searchbox"]')) {
+    return primary;
+  }
 
-  // 3. Match any contenteditable or textarea, filtering out search/typeahead fields
+  // 2. Fallback: query all contenteditable/textarea elements, strictly excluding search/typeahead
   const candidates = Array.from(container.querySelectorAll(
     '[contenteditable], textarea, div[role="textbox"]'
   )).filter(el => {
     if (el.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
-    const role = el.getAttribute('role') || '';
-    if (role === 'combobox' || role === 'searchbox') return false;
+    if (el.closest('.msg-connections-typeahead, [class*="typeahead"], [role="combobox"], [role="searchbox"]')) return false;
     const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
     if (ph.includes('search') || ph.includes('type a name')) return false;
     return true;
@@ -717,57 +722,54 @@ function findMessageEditorInContainer(container) {
   if (candidates.length === 1) return candidates[0];
 
   if (candidates.length > 1) {
-    // Message box is significantly taller than the typeahead search box
+    // Pick the message box (tallest editable area in the window)
     candidates.sort((a, b) => (b.offsetHeight || b.clientHeight || 0) - (a.offsetHeight || a.clientHeight || 0));
     return candidates[0];
   }
 
-  return null;
+  return primary || null;
 }
 
 // Master Universal Chat Window & Editor Finder
+// NOTE: We NEVER exclude main or .scaffold-layout__main here because LinkedIn's
+// messaging overlay can be mounted anywhere in the application shell.
 function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // Step 1: Collect all visible chat overlay containers outside main content
+  // Step 1: Collect all chat bubbles, compose dialogs, and overlays on the page
   const containers = Array.from(new Set([
-    ...document.querySelectorAll('aside.msg-overlay-container > div'),
+    ...document.querySelectorAll('aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)'),
     ...document.querySelectorAll('.msg-overlay-conversation-bubble'),
     ...document.querySelectorAll('.msg-overlay-compose-bubble'),
-    ...document.querySelectorAll('aside[class*="msg-overlay"] > div'),
+    ...document.querySelectorAll('aside[class*="msg-overlay"] > div:not(.msg-overlay-list-bubble)'),
     ...document.querySelectorAll('div[class*="msg-overlay-conversation-bubble"]'),
     ...document.querySelectorAll('div[class*="msg-overlay-compose-bubble"]'),
-    ...document.querySelectorAll('aside > div'),
+    ...document.querySelectorAll('aside > div:not(.msg-overlay-list-bubble)'),
     ...document.querySelectorAll('div[role="dialog"]'),
     ...document.querySelectorAll('.artdeco-modal')
   ])).filter(c => {
     if (!c || c === document.body || c === document.documentElement) return false;
-    if (c.closest('#law-floating-hud, #global-nav, .global-nav, nav, main, #main, .scaffold-layout__main')) return false;
+    // Exclude our HUD, the global nav, and the connection list cards
+    if (c.closest('#law-floating-hud, #global-nav, .global-nav, nav, .mn-connection-card, [class*="connection-card"]')) return false;
     if (c.id === 'law-floating-hud') return false;
-    // Exclude minimized dock tray unless it contains an active editor
+    // Exclude the minimized inbox dock tray
     if (c.classList.contains('msg-overlay-list-bubble') && !c.querySelector('[contenteditable], textarea')) return false;
-    const rect = c.getBoundingClientRect();
-    const w = rect.width || c.offsetWidth || 0;
-    const h = rect.height || c.offsetHeight || 0;
-    return w > 80 && h > 80;
+    return true;
   });
 
-  // Step 2: Check if any recipient name elements (pills, headers, lockups) exist outside main
+  // Step 2: Also discover chat containers by finding recipient pills or names
   if (targetFirst && targetFirst !== 'there') {
     const nameEls = Array.from(document.querySelectorAll([
       'aside [class*="pill"]',
       'aside .artdeco-pill',
       'aside [class*="lockup"]',
       'aside h2',
-      'aside p',
-      'aside span',
       '[role="dialog"] [class*="pill"]',
       '[role="dialog"] .artdeco-pill',
-      '[role="dialog"] h2',
-      '[role="dialog"] span'
+      '[role="dialog"] h2'
     ].join(','))).filter(el => {
-      if (el.closest('main, #main, .scaffold-layout__main, #law-floating-hud, #global-nav, .global-nav')) return false;
+      if (el.closest('#law-floating-hud, #global-nav, .global-nav, .mn-connection-card, [class*="connection-card"]')) return false;
       const txt = (el.innerText || el.textContent || '').toLowerCase();
       return txt.includes(targetFirst);
     });
@@ -781,7 +783,7 @@ function findActiveChatWindow(targetName = '') {
     }
   }
 
-  // PASS 1: Direct name match on container text
+  // PASS 1: Match container whose text includes target name
   for (const c of containers) {
     const text = (c.innerText || c.textContent || '').toLowerCase();
     const matches = (targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) ||
@@ -789,13 +791,13 @@ function findActiveChatWindow(targetName = '') {
     if (matches) {
       const editor = findMessageEditorInContainer(c);
       if (editor) {
-        console.log(`[LAW] Locked chat for "${targetName}" via container text match!`);
+        console.log(`[LAW] Locked chat for "${targetName}" via name match in container!`);
         return { textbox: editor, container: c };
       }
     }
   }
 
-  // PASS 2: If exactly 1 chat container is open and expanded, accept it
+  // PASS 2: If only 1 chat container is open, accept it directly!
   if (containers.length === 1) {
     const c = containers[0];
     const editor = findMessageEditorInContainer(c);
@@ -805,31 +807,32 @@ function findActiveChatWindow(targetName = '') {
     }
   }
 
-  // PASS 3: Multiple containers — match one that has "New message" or "Write a message"
+  // PASS 3: Multiple containers — match one with "New message" or "Write a message"
   for (const c of containers) {
     const text = (c.innerText || c.textContent || '').toLowerCase();
     if (text.includes('new message') || text.includes('write a message')) {
       const editor = findMessageEditorInContainer(c);
       if (editor) {
-        console.log(`[LAW] Matched compose container for "${targetName}" via title!`);
+        console.log(`[LAW] Matched compose container for "${targetName}" via header!`);
         return { textbox: editor, container: c };
       }
     }
   }
 
-  // PASS 4: Global fallback — find ANY message textbox outside the main content area
-  const globalEditors = Array.from(document.querySelectorAll([
+  // PASS 4: Universal fallback — find any message editor on page outside connections list
+  const fallbackEditors = Array.from(document.querySelectorAll([
+    'div.msg-form__contenteditable',
+    '.public-DraftEditor-content',
     'div[aria-label*="Write a message" i]',
     'div[data-placeholder*="Write a message" i]',
-    'div.msg-form__contenteditable',
     'div[role="textbox"][contenteditable]',
     'form.msg-form [contenteditable]'
   ].join(','))).filter(el => {
-    return !el.closest('main, #main, .scaffold-layout__main, #law-floating-hud, #global-nav, .global-nav');
+    return !el.closest('#law-floating-hud, #global-nav, .global-nav, .mn-connection-card, [class*="connection-card"]');
   });
 
-  if (globalEditors.length > 0) {
-    const editor = globalEditors[0];
+  if (fallbackEditors.length > 0) {
+    const editor = fallbackEditors[0];
     let container = editor.closest('.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [role="dialog"], aside > div, aside');
     if (!container) container = editor.parentElement?.parentElement?.parentElement || editor.parentElement;
     console.log(`[LAW] Global fallback message editor accepted for "${targetName}".`);
@@ -839,7 +842,6 @@ function findActiveChatWindow(targetName = '') {
   return null;
 }
 
-// Poll for active chat window
 async function waitForConversationWindow(targetName = '', maxAttempts = 35) {
   console.log(`[LAW] Waiting for conversation window for "${targetName}" (maxAttempts: ${maxAttempts})...`);
   for (let i = 0; i < maxAttempts; i++) {
