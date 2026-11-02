@@ -687,156 +687,80 @@ function verifyConversationRecipient(activeConvo, targetName) {
 
 // Universal Active Chat Finder: Finds the message editor and window strictly for targetName
 // Helper: Find the message text editor inside a specific chat container
-function findMessageEditorInContainer(container) {
-  if (!container) return null;
+// Universal Chat Window & Editor Finder using Heuristic Scoring
+function findActiveChatWindow(targetName = '') {
+  const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
+  const targetFull = (targetName || '').trim().toLowerCase();
 
-  // 1. Match specific Draft.js and LinkedIn message editor elements
-  const primary = container.querySelector([
-    '.msg-form__contenteditable',
-    '.public-DraftEditor-content',
-    'div[role="textbox"][contenteditable]',
-    'div[contenteditable="true"]',
-    'div[contenteditable]',
-    '[aria-label*="Write a message" i]',
-    '[data-placeholder*="Write a message" i]',
-    'textarea.msg-form__textarea',
-    'textarea'
-  ].join(','));
-
-  // Ensure this editor is NOT inside the recipient typeahead search box
-  if (primary && !primary.closest('.msg-connections-typeahead, [class*="typeahead"], [role="combobox"], [role="searchbox"]')) {
-    return primary;
-  }
-
-  // 2. Fallback: query all contenteditable/textarea elements, strictly excluding search/typeahead
-  const candidates = Array.from(container.querySelectorAll(
-    '[contenteditable], textarea, div[role="textbox"]'
+  // Step 1: Find all potential editable inputs on page
+  const allEditables = Array.from(document.querySelectorAll(
+    '[contenteditable="true"], [contenteditable=""], [contenteditable], textarea, div[role="textbox"]'
   )).filter(el => {
-    if (el.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
-    if (el.closest('.msg-connections-typeahead, [class*="typeahead"], [role="combobox"], [role="searchbox"]')) return false;
+    if (el.closest('#law-floating-hud, #app-container, .app-container')) return false;
+    if (el.closest('#global-nav, .global-nav, header.global-nav, nav')) return false;
+    if (el.closest('.mn-connection-card, [class*="connection-card"]')) return false;
+    const role = el.getAttribute('role') || '';
+    if (role === 'combobox' || role === 'searchbox') return false;
     const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
     if (ph.includes('search') || ph.includes('type a name')) return false;
     return true;
   });
 
-  if (candidates.length === 1) return candidates[0];
+  // Step 2: Score each candidate based on chat window signals
+  const scored = [];
 
-  if (candidates.length > 1) {
-    // Pick the message box (tallest editable area in the window)
-    candidates.sort((a, b) => (b.offsetHeight || b.clientHeight || 0) - (a.offsetHeight || a.clientHeight || 0));
-    return candidates[0];
-  }
+  for (const ed of allEditables) {
+    let win = ed.closest([
+      '.msg-overlay-conversation-bubble',
+      '.msg-overlay-compose-bubble',
+      '.artdeco-modal',
+      '[role="dialog"]',
+      'aside.msg-overlay-container > div',
+      'aside > div',
+      'form.msg-form',
+      'form'
+    ].join(','));
 
-  return primary || null;
-}
-
-// Master Universal Chat Window & Editor Finder
-// NOTE: We NEVER exclude main or .scaffold-layout__main here because LinkedIn's
-// messaging overlay can be mounted anywhere in the application shell.
-function findActiveChatWindow(targetName = '') {
-  const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
-  const targetFull = (targetName || '').trim().toLowerCase();
-
-  // Step 1: Collect all chat bubbles, compose dialogs, and overlays on the page
-  const containers = Array.from(new Set([
-    ...document.querySelectorAll('aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)'),
-    ...document.querySelectorAll('.msg-overlay-conversation-bubble'),
-    ...document.querySelectorAll('.msg-overlay-compose-bubble'),
-    ...document.querySelectorAll('aside[class*="msg-overlay"] > div:not(.msg-overlay-list-bubble)'),
-    ...document.querySelectorAll('div[class*="msg-overlay-conversation-bubble"]'),
-    ...document.querySelectorAll('div[class*="msg-overlay-compose-bubble"]'),
-    ...document.querySelectorAll('aside > div:not(.msg-overlay-list-bubble)'),
-    ...document.querySelectorAll('div[role="dialog"]'),
-    ...document.querySelectorAll('.artdeco-modal')
-  ])).filter(c => {
-    if (!c || c === document.body || c === document.documentElement) return false;
-    // Exclude our HUD, the global nav, and the connection list cards
-    if (c.closest('#law-floating-hud, #global-nav, .global-nav, nav, .mn-connection-card, [class*="connection-card"]')) return false;
-    if (c.id === 'law-floating-hud') return false;
-    // Exclude the minimized inbox dock tray
-    if (c.classList.contains('msg-overlay-list-bubble') && !c.querySelector('[contenteditable], textarea')) return false;
-    return true;
-  });
-
-  // Step 2: Also discover chat containers by finding recipient pills or names
-  if (targetFirst && targetFirst !== 'there') {
-    const nameEls = Array.from(document.querySelectorAll([
-      'aside [class*="pill"]',
-      'aside .artdeco-pill',
-      'aside [class*="lockup"]',
-      'aside h2',
-      '[role="dialog"] [class*="pill"]',
-      '[role="dialog"] .artdeco-pill',
-      '[role="dialog"] h2'
-    ].join(','))).filter(el => {
-      if (el.closest('#law-floating-hud, #global-nav, .global-nav, .mn-connection-card, [class*="connection-card"]')) return false;
-      const txt = (el.innerText || el.textContent || '').toLowerCase();
-      return txt.includes(targetFirst);
-    });
-
-    for (const nel of nameEls) {
-      let win = nel.closest('.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [role="dialog"], aside > div, aside');
-      if (!win) win = nel.parentElement?.parentElement?.parentElement;
-      if (win && win !== document.body && !containers.includes(win)) {
-        containers.unshift(win); // Prioritize this container!
+    if (!win) {
+      let p = ed.parentElement;
+      for (let depth = 0; depth < 12 && p && p !== document.body; depth++) {
+        if (p.querySelector && p.querySelector('button[aria-label*="Close" i], button[data-control-name*="close"], [class*="pill"]')) {
+          win = p;
+          break;
+        }
+        p = p.parentElement;
       }
     }
+
+    const container = win || ed.parentElement?.parentElement || ed.parentElement;
+    const cText = (container.innerText || container.textContent || '').toLowerCase();
+
+    let score = 0;
+
+    // Target recipient name match (+100 for first name, +100 for full name)
+    if (targetFirst && targetFirst !== 'there' && cText.includes(targetFirst)) score += 100;
+    if (targetFull && cText.includes(targetFull)) score += 100;
+
+    // "Write a message" placeholder signal
+    const ph = (ed.getAttribute('placeholder') || ed.getAttribute('data-placeholder') || ed.getAttribute('aria-label') || '').toLowerCase();
+    if (ph.includes('write a message') || cText.includes('write a message')) score += 50;
+
+    // Send button nearby signal
+    if (container.querySelector && container.querySelector('button[type="submit"], button.msg-form__send-button, button[aria-label*="send" i]')) score += 50;
+    if (cText.includes('send')) score += 20;
+
+    // Compose title signal
+    if (cText.includes('new message')) score += 30;
+
+    scored.push({ ed, container, score });
   }
 
-  // PASS 1: Match container whose text includes target name
-  for (const c of containers) {
-    const text = (c.innerText || c.textContent || '').toLowerCase();
-    const matches = (targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) ||
-                    (targetFull && text.includes(targetFull));
-    if (matches) {
-      const editor = findMessageEditorInContainer(c);
-      if (editor) {
-        console.log(`[LAW] Locked chat for "${targetName}" via name match in container!`);
-        return { textbox: editor, container: c };
-      }
-    }
-  }
+  scored.sort((a, b) => b.score - a.score);
 
-  // PASS 2: If only 1 chat container is open, accept it directly!
-  if (containers.length === 1) {
-    const c = containers[0];
-    const editor = findMessageEditorInContainer(c);
-    if (editor) {
-      console.log(`[LAW] Single open chat window accepted for "${targetName}".`);
-      return { textbox: editor, container: c };
-    }
-  }
-
-  // PASS 3: Multiple containers — match one with "New message" or "Write a message"
-  for (const c of containers) {
-    const text = (c.innerText || c.textContent || '').toLowerCase();
-    if (text.includes('new message') || text.includes('write a message')) {
-      const editor = findMessageEditorInContainer(c);
-      if (editor) {
-        console.log(`[LAW] Matched compose container for "${targetName}" via header!`);
-        return { textbox: editor, container: c };
-      }
-    }
-  }
-
-  // PASS 4: Universal fallback — find any message editor on page outside connections list
-  const fallbackEditors = Array.from(document.querySelectorAll([
-    'div.msg-form__contenteditable',
-    '.public-DraftEditor-content',
-    'div[aria-label*="Write a message" i]',
-    'div[data-placeholder*="Write a message" i]',
-    'div[role="textbox"][contenteditable]',
-    'form.msg-form [contenteditable]'
-  ].join(','))).filter(el => {
-    return !el.closest('#law-floating-hud, #global-nav, .global-nav, .mn-connection-card, [class*="connection-card"]');
-  });
-
-  if (fallbackEditors.length > 0) {
-    const editor = fallbackEditors[0];
-    let container = editor.closest('.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [role="dialog"], aside > div, aside');
-    if (!container) container = editor.parentElement?.parentElement?.parentElement || editor.parentElement;
-    console.log(`[LAW] Global fallback message editor accepted for "${targetName}".`);
-    return { textbox: editor, container };
+  if (scored.length > 0 && scored[0].score >= 50) {
+    const best = scored[0];
+    console.log(`[LAW] Locked chat for "${targetName}" with score ${best.score}!`);
+    return { textbox: best.ed, container: best.container };
   }
 
   return null;
@@ -1374,6 +1298,8 @@ async function runAutoWelcomeSequence() {
 
         // Click "Message" button
         simulateClick(conn.messageButton);
+        const innerBtn = conn.messageButton.querySelector('span, .artdeco-button__text');
+        if (innerBtn) simulateClick(innerBtn);
 
         // Wait up to 35 attempts (~10.5s) for THIS recipient's window to appear
         convoResult = await waitForConversationWindow(conn.name, 35);
