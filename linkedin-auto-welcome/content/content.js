@@ -1286,16 +1286,21 @@ async function runAutoWelcomeSequence() {
     // Map existing sent history
     const sentMap = new Set((sentHistory || []).map(h => normalizeUrl(h.profileUrl)));
 
-    // Find cards on screen
-    let connections = getConnectionCards();
-
-    if (connections.length === 0) {
-      updateHud('Scanning connections list (scrolling down)...');
-      window.scrollBy({ top: 350, behavior: 'smooth' });
-      await sleep(1500);
-      window.scrollBy({ top: -100, behavior: 'smooth' });
-      await sleep(1000);
+    // Wait for connection cards to render from LinkedIn's API (up to 15 seconds)
+    let connections = [];
+    for (let attempt = 0; attempt < 15; attempt++) {
+      if (shouldStop) break;
       connections = getConnectionCards();
+      if (connections.length > 0) break;
+
+      // Gentle scroll on later attempts to wake up lazy rendering
+      if (attempt % 3 === 2) {
+        updateHud('Loading connections list from LinkedIn...', formatQuota(stats.todayCount, settings.dailyLimit));
+        window.scrollBy({ top: 300, behavior: 'smooth' });
+        await sleep(500);
+        window.scrollBy({ top: -100, behavior: 'smooth' });
+      }
+      await sleep(1000);
     }
 
     if (connections.length === 0) {
