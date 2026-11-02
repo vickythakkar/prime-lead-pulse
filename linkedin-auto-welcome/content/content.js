@@ -686,102 +686,154 @@ function verifyConversationRecipient(activeConvo, targetName) {
 }
 
 // Universal Active Chat Finder: Finds the message editor and window strictly for targetName
+// Helper: Find the message text editor inside a specific chat container
+function findMessageEditorInContainer(container) {
+  if (!container) return null;
+
+  // 1. Match by placeholder or aria-label containing "Write a message"
+  const writeMsg = container.querySelector(
+    '[aria-label*="Write a message" i], [data-placeholder*="Write a message" i], [placeholder*="Write a message" i]'
+  );
+  if (writeMsg) return writeMsg;
+
+  // 2. Match standard LinkedIn message classes
+  const msgClassEl = container.querySelector(
+    '.msg-form__contenteditable, div[role="textbox"][contenteditable], [contenteditable][role="textbox"]'
+  );
+  if (msgClassEl) return msgClassEl;
+
+  // 3. Match any contenteditable or textarea, filtering out search/typeahead fields
+  const candidates = Array.from(container.querySelectorAll(
+    '[contenteditable], textarea, div[role="textbox"]'
+  )).filter(el => {
+    if (el.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
+    const role = el.getAttribute('role') || '';
+    if (role === 'combobox' || role === 'searchbox') return false;
+    const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
+    if (ph.includes('search') || ph.includes('type a name')) return false;
+    return true;
+  });
+
+  if (candidates.length === 1) return candidates[0];
+
+  if (candidates.length > 1) {
+    // Message box is significantly taller than the typeahead search box
+    candidates.sort((a, b) => (b.offsetHeight || b.clientHeight || 0) - (a.offsetHeight || a.clientHeight || 0));
+    return candidates[0];
+  }
+
+  return null;
+}
+
+// Master Universal Chat Window & Editor Finder
 function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // ── Scan ALL contenteditable elements on the page ────────────────────────
-  // LinkedIn frequently changes class names. We don't rely on specific classes.
-  // Instead: grab every [contenteditable="true"], filter to only message editors.
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const allCE = Array.from(document.querySelectorAll('[contenteditable="true"]'));
-
-  // Filter: keep only message box editors, not search/typeahead inputs
-  const messageEditors = allCE.filter(el => {
-    // Skip single-line inputs (typeahead search boxes are usually div with role=combobox)
-    const role = el.getAttribute('role') || '';
-    if (role === 'combobox' || role === 'searchbox') return false;
-    // Skip elements inside the HUD or global nav
-    if (el.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
-    // Skip elements visually inside the connections list (left sidebar)
-    if (el.closest('.mn-connection-card, [class*="connection-card"], .scaffold-layout__main > main')) return false;
-    // Skip elements that are ONLY inside a search field (typeahead for adding recipients)
-    // These are usually inside a header area with no submit button nearby
-    const nearForm = el.closest('form') || el.closest('[class*="form"]') || el.closest('[class*="composer"]') || el.closest('[class*="compose"]') || el.closest('[class*="message"]') || el.closest('[class*="msg"]');
-    const nearOverlay = el.closest('aside') || el.closest('[role="dialog"]') || el.closest('[class*="overlay"]') || el.closest('[class*="bubble"]');
-    if (!nearForm && !nearOverlay) return false;
-    // Must not be a tiny single-line typeahead (those are inside header/typeahead containers)
-    const inTypeahead = el.closest('[class*="typeahead"], [class*="search-field"], [class*="recipient"]');
-    if (inTypeahead) return false;
-    return true;
+  // Step 1: Collect all visible chat overlay containers outside main content
+  const containers = Array.from(new Set([
+    ...document.querySelectorAll('aside.msg-overlay-container > div'),
+    ...document.querySelectorAll('.msg-overlay-conversation-bubble'),
+    ...document.querySelectorAll('.msg-overlay-compose-bubble'),
+    ...document.querySelectorAll('aside[class*="msg-overlay"] > div'),
+    ...document.querySelectorAll('div[class*="msg-overlay-conversation-bubble"]'),
+    ...document.querySelectorAll('div[class*="msg-overlay-compose-bubble"]'),
+    ...document.querySelectorAll('aside > div'),
+    ...document.querySelectorAll('div[role="dialog"]'),
+    ...document.querySelectorAll('.artdeco-modal')
+  ])).filter(c => {
+    if (!c || c === document.body || c === document.documentElement) return false;
+    if (c.closest('#law-floating-hud, #global-nav, .global-nav, nav, main, #main, .scaffold-layout__main')) return false;
+    if (c.id === 'law-floating-hud') return false;
+    // Exclude minimized dock tray unless it contains an active editor
+    if (c.classList.contains('msg-overlay-list-bubble') && !c.querySelector('[contenteditable], textarea')) return false;
+    const rect = c.getBoundingClientRect();
+    const w = rect.width || c.offsetWidth || 0;
+    const h = rect.height || c.offsetHeight || 0;
+    return w > 80 && h > 80;
   });
 
-  console.log(`[LAW] findActiveChatWindow: ${allCE.length} total contenteditable, ${messageEditors.length} message editors, looking for "${targetName}"`);
+  // Step 2: Check if any recipient name elements (pills, headers, lockups) exist outside main
+  if (targetFirst && targetFirst !== 'there') {
+    const nameEls = Array.from(document.querySelectorAll([
+      'aside [class*="pill"]',
+      'aside .artdeco-pill',
+      'aside [class*="lockup"]',
+      'aside h2',
+      'aside p',
+      'aside span',
+      '[role="dialog"] [class*="pill"]',
+      '[role="dialog"] .artdeco-pill',
+      '[role="dialog"] h2',
+      '[role="dialog"] span'
+    ].join(','))).filter(el => {
+      if (el.closest('main, #main, .scaffold-layout__main, #law-floating-hud, #global-nav, .global-nav')) return false;
+      const txt = (el.innerText || el.textContent || '').toLowerCase();
+      return txt.includes(targetFirst);
+    });
 
-  // For each editor: walk UP to find the chat container, check for target name
-  const candidates = [];
-  for (const ed of messageEditors) {
-    // Walk up from the editor to find a meaningful container
-    let container = null;
-    let el = ed.parentElement;
-    let steps = 0;
-    while (el && el !== document.body && steps < 20) {
-      steps++;
-      // Stop at aside direct children, dialogs, or known LinkedIn overlay classes
-      const cls = (el.className || '').toLowerCase();
-      const tag = el.tagName;
-      const role = el.getAttribute('role') || '';
-      if (
-        role === 'dialog' ||
-        cls.includes('bubble') ||
-        cls.includes('compose') ||
-        cls.includes('overlay') ||
-        cls.includes('msg-overlay') ||
-        (tag === 'ASIDE') ||
-        (el.parentElement && el.parentElement.tagName === 'ASIDE')
-      ) {
-        container = el;
-        break;
+    for (const nel of nameEls) {
+      let win = nel.closest('.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [role="dialog"], aside > div, aside');
+      if (!win) win = nel.parentElement?.parentElement?.parentElement;
+      if (win && win !== document.body && !containers.includes(win)) {
+        containers.unshift(win); // Prioritize this container!
       }
-      el = el.parentElement;
-    }
-    // Fallback: use closest aside or the editor's 8th ancestor
-    if (!container) {
-      container = ed.closest('aside') || ed.parentElement?.parentElement?.parentElement?.parentElement?.parentElement?.parentElement?.parentElement?.parentElement || ed.parentElement;
-    }
-    if (container && container.id === 'law-floating-hud') continue;
-    candidates.push({ ed, container: container || ed.parentElement });
-  }
-
-  console.log(`[LAW] findActiveChatWindow: ${candidates.length} editor-container pairs`);
-
-  // PASS 1: name match
-  for (const { ed, container } of candidates) {
-    const cText = (container.innerText || container.textContent || '').toLowerCase();
-    const nameMatch =
-      (targetFirst && targetFirst !== 'there' && cText.includes(targetFirst)) ||
-      (targetFull && cText.includes(targetFull));
-    if (nameMatch) {
-      console.log(`[LAW] Locked chat for "${targetName}" via name match! Editor: ${ed.tagName} ${ed.className?.slice(0,40)}`);
-      return { textbox: ed, container };
     }
   }
 
-  // PASS 2: single editor — no ambiguity
-  if (candidates.length === 1) {
-    const { ed, container } = candidates[0];
-    console.log(`[LAW] Single editor found, assuming "${targetName}". Editor: ${ed.tagName} ${ed.className?.slice(0,40)}`);
-    return { textbox: ed, container };
+  // PASS 1: Direct name match on container text
+  for (const c of containers) {
+    const text = (c.innerText || c.textContent || '').toLowerCase();
+    const matches = (targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) ||
+                    (targetFull && text.includes(targetFull));
+    if (matches) {
+      const editor = findMessageEditorInContainer(c);
+      if (editor) {
+        console.log(`[LAW] Locked chat for "${targetName}" via container text match!`);
+        return { textbox: editor, container: c };
+      }
+    }
   }
 
-  // PASS 3: multiple editors — take the one whose container has a "New message" or similar title
-  for (const { ed, container } of candidates) {
-    const cText = (container.innerText || container.textContent || '').toLowerCase();
-    if (cText.includes('new message') || cText.includes('write a message') || cText.includes('type a message')) {
-      console.log(`[LAW] Matched by compose title for "${targetName}"`);
-      return { textbox: ed, container };
+  // PASS 2: If exactly 1 chat container is open and expanded, accept it
+  if (containers.length === 1) {
+    const c = containers[0];
+    const editor = findMessageEditorInContainer(c);
+    if (editor) {
+      console.log(`[LAW] Single open chat window accepted for "${targetName}".`);
+      return { textbox: editor, container: c };
     }
+  }
+
+  // PASS 3: Multiple containers — match one that has "New message" or "Write a message"
+  for (const c of containers) {
+    const text = (c.innerText || c.textContent || '').toLowerCase();
+    if (text.includes('new message') || text.includes('write a message')) {
+      const editor = findMessageEditorInContainer(c);
+      if (editor) {
+        console.log(`[LAW] Matched compose container for "${targetName}" via title!`);
+        return { textbox: editor, container: c };
+      }
+    }
+  }
+
+  // PASS 4: Global fallback — find ANY message textbox outside the main content area
+  const globalEditors = Array.from(document.querySelectorAll([
+    'div[aria-label*="Write a message" i]',
+    'div[data-placeholder*="Write a message" i]',
+    'div.msg-form__contenteditable',
+    'div[role="textbox"][contenteditable]',
+    'form.msg-form [contenteditable]'
+  ].join(','))).filter(el => {
+    return !el.closest('main, #main, .scaffold-layout__main, #law-floating-hud, #global-nav, .global-nav');
+  });
+
+  if (globalEditors.length > 0) {
+    const editor = globalEditors[0];
+    let container = editor.closest('.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [role="dialog"], aside > div, aside');
+    if (!container) container = editor.parentElement?.parentElement?.parentElement || editor.parentElement;
+    console.log(`[LAW] Global fallback message editor accepted for "${targetName}".`);
+    return { textbox: editor, container };
   }
 
   return null;
@@ -812,63 +864,59 @@ async function waitForConversationWindow(targetName = '', maxAttempts = 35) {
  */
 async function typeIntoReactInput(element, text, container) {
   if (!element || !text) return false;
-  console.log('[LAW] typeIntoReactInput starting with text length:', text.length);
+  console.log('[LAW] typeIntoReactInput typing message length:', text.length);
 
   try {
     try { element.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (e) {}
 
-    // If native textarea or input
+    // Native textarea or input
     if (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT') {
       element.focus();
-      element.click();
-      await sleep(100);
       element.value = text;
       element.dispatchEvent(new Event('input', { bubbles: true }));
       element.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
 
-    // Target the contenteditable div (the message editor, not typeahead)
-    const target = element.getAttribute('contenteditable') === 'true'
+    // Resolve target contenteditable
+    const target = element.hasAttribute('contenteditable')
       ? element
-      : (element.querySelector('[contenteditable="true"]') || element);
+      : (element.querySelector('[contenteditable]') || element);
 
     target.focus();
-    await sleep(150);
+    await sleep(100);
     target.click();
-    await sleep(150);
+    await sleep(100);
 
-    // ── Method A: execCommand insertText ──
+    // Place cursor / select all contents
     try {
-      document.execCommand('selectAll', false, null);
-      await sleep(50);
-      document.execCommand('insertText', false, text);
-      console.log('[LAW] Method A (execCommand insertText) attempted');
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      sel.removeAllRanges();
+      sel.addRange(range);
     } catch (e) {}
 
-    // ── Method B: Clipboard paste (Draft.js handles paste events natively) ──
+    // Method A: insertText command
+    try {
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, text);
+    } catch (e) {}
+
+    // Method B: Synthetic ClipboardEvent paste (Draft.js converts this directly to ContentState)
     try {
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
-      dt.setData('text/html', '<p>' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</p>');
-      // Select all first so paste replaces
-      document.execCommand('selectAll', false, null);
-      await sleep(50);
       const pasteEvt = new ClipboardEvent('paste', {
         clipboardData: dt,
         bubbles: true,
         cancelable: true,
         composed: true
       });
-      const handled = target.dispatchEvent(pasteEvt);
-      console.log('[LAW] Method B (clipboard paste) dispatched, handled:', handled);
-      await sleep(200);
-      target.dispatchEvent(new Event('input', { bubbles: true }));
-    } catch (e) {
-      console.warn('[LAW] Method B error:', e);
-    }
+      target.dispatchEvent(pasteEvt);
+    } catch (e) {}
 
-    // ── Method C: InputEvent (React synthetic event trigger) ──
+    // Method C: InputEvents for React state sync
     try {
       target.dispatchEvent(new InputEvent('beforeinput', {
         bubbles: true, cancelable: true, inputType: 'insertText', data: text
@@ -1430,13 +1478,19 @@ async function runAutoWelcomeSequence() {
         sendBtn.removeAttribute('disabled');
         sendBtn.setAttribute('aria-disabled', 'false');
         simulateClick(sendBtn);
-        await sleep(1500);
 
-        const remainingText = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
-        if (!remainingText || remainingText.startsWith('write a message') || remainingText.length < 5) {
-          messageSuccessfullySent = true;
-        } else {
-          // Fallback: Dispatch Enter key
+        // Poll up to 3.5s for textbox to clear (indicates message sent)
+        for (let w = 0; w < 7; w++) {
+          await sleep(500);
+          const remainingText = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
+          if (!remainingText || remainingText.startsWith('write a message') || remainingText.length < 5) {
+            messageSuccessfullySent = true;
+            break;
+          }
+        }
+
+        // If not yet cleared, fallback to pressing Enter key
+        if (!messageSuccessfullySent) {
           textBox.focus();
           textBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
           await sleep(1500);
