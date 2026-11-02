@@ -534,11 +534,11 @@ function getAllOpenBubbles() {
   });
 }
 
-// Universal Close Button Finder in any window / modal / dialog
+// Find close button in any window / modal / dialog
 function findCloseButton(win) {
   if (!win) return null;
 
-  // 1. Explicit attributes
+  // 1. Explicit close attributes
   const explicit = win.querySelector([
     'button[data-control-name*="close"]',
     'button[data-control-name*="dismiss"]',
@@ -554,7 +554,7 @@ function findCloseButton(win) {
     return headerBtns[headerBtns.length - 1];
   }
 
-  // 3. Fallback: Any button with an SVG or text '✕'
+  // 3. Any button with SVG close icon or '✕' text
   const allBtns = Array.from(win.querySelectorAll('button'));
   for (const b of allBtns) {
     const text = (b.innerText || b.textContent || '').trim().toLowerCase();
@@ -569,23 +569,41 @@ function findCloseButton(win) {
   return null;
 }
 
-// Universal Window Finder from an element
+// Universal Window Finder: ascends from any child element to its containing chat bubble / modal / dialog
 function findEnclosingWindow(el) {
   if (!el) return null;
   let curr = el;
   let candidate = null;
 
-  for (let depth = 0; depth < 18 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
-    if (curr.getAttribute('role') === 'dialog' || curr.classList.contains('artdeco-modal') ||
-        curr.parentElement?.classList?.contains('msg-overlay-container') || curr.parentElement?.tagName === 'ASIDE') {
+  for (let depth = 0; depth < 20 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
+    // 1. If parent is msg-overlay-container or ASIDE, curr is the chat bubble!
+    if (curr.parentElement?.classList?.contains('msg-overlay-container') || curr.parentElement?.tagName === 'ASIDE') {
+      if (!curr.classList.contains('msg-overlay-list-bubble')) {
+        return curr;
+      }
+    }
+
+    // 2. Dialog or modal
+    if (curr.getAttribute('role') === 'dialog' || curr.classList.contains('artdeco-modal')) {
       return curr;
     }
+
+    // 3. Known conversation / compose bubble classes
+    if (curr.classList.contains('msg-overlay-conversation-bubble') ||
+        curr.classList.contains('msg-overlay-compose-bubble') ||
+        curr.classList.contains('msg-convo-wrapper')) {
+      return curr;
+    }
+
+    // 4. Container that holds a header with a close button
     if (curr.querySelector('header button, [class*="bubble-header"] button, button[aria-label*="Close" i]')) {
       candidate = curr;
     }
+
     if (curr.parentElement === document.body || curr.parentElement?.tagName === 'MAIN' || curr.id === 'app__container') {
       break;
     }
+
     curr = curr.parentElement;
   }
 
@@ -595,6 +613,18 @@ function findEnclosingWindow(el) {
 // Close all existing open chat / compose windows cleanly
 async function closeAllOpenChats() {
   for (let pass = 0; pass < 3; pass++) {
+    // Collect all open chat bubbles across overlay container, aside, and dialogs
+    const bubbles = Array.from(document.querySelectorAll([
+      'aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)',
+      '.msg-overlay-conversation-bubble',
+      '.msg-overlay-compose-bubble',
+      '.msg-convo-wrapper',
+      'aside > div:not(.msg-overlay-list-bubble)',
+      'div[role="dialog"]',
+      '.artdeco-modal'
+    ].join(','))).filter(b => !b.closest('#law-floating-hud, header, nav, #global-nav, .global-nav') && !b.classList.contains('msg-overlay-list-bubble'));
+
+    // Also collect any windows enclosing message editors
     const editors = Array.from(document.querySelectorAll([
       'div.msg-form__contenteditable',
       'div[role="textbox"]',
@@ -603,11 +633,17 @@ async function closeAllOpenChats() {
       'textarea'
     ].join(','))).filter(el => !el.closest('#law-floating-hud, header, nav, #global-nav, .global-nav, .msg-overlay-list-bubble'));
 
-    if (editors.length === 0) break;
+    for (const ed of editors) {
+      const w = findEnclosingWindow(ed);
+      if (w && !bubbles.includes(w) && !w.classList.contains('msg-overlay-list-bubble')) {
+        bubbles.push(w);
+      }
+    }
 
-    for (const editor of editors) {
-      const win = findEnclosingWindow(editor);
-      const closeBtn = findCloseButton(win);
+    if (bubbles.length === 0) break;
+
+    for (const b of bubbles) {
+      const closeBtn = findCloseButton(b);
       if (closeBtn) {
         simulateClick(closeBtn);
       }
@@ -634,7 +670,8 @@ async function closeAllOpenChats() {
 // Close a specific conversation window
 async function closeConversationWindow(convoEl) {
   if (convoEl) {
-    const closeBtn = findCloseButton(convoEl) || findCloseButton(findEnclosingWindow(convoEl));
+    const win = findEnclosingWindow(convoEl) || convoEl;
+    const closeBtn = findCloseButton(win);
     if (closeBtn) {
       simulateClick(closeBtn);
     }
@@ -660,7 +697,9 @@ function verifyConversationRecipient(activeConvo, targetName) {
   const targetFirst = extractFirstName(targetName).toLowerCase();
   const targetFull = targetName.trim().toLowerCase();
 
-  const text = (activeConvo.innerText || activeConvo.textContent || '').toLowerCase();
+  const win = findEnclosingWindow(activeConvo) || activeConvo;
+  const text = (win.innerText || win.textContent || '').toLowerCase();
+
   if (targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) {
     return { match: true, recipient: targetFirst, source: 'text' };
   }
@@ -668,17 +707,52 @@ function verifyConversationRecipient(activeConvo, targetName) {
     return { match: true, recipient: targetFull, source: 'text' };
   }
 
-  // Also check ancestor tree
-  let curr = activeConvo;
-  for (let d = 0; d < 8 && curr && curr !== document.body; d++) {
-    const pText = (curr.innerText || curr.textContent || '').toLowerCase();
-    if (targetFirst && targetFirst !== 'there' && pText.includes(targetFirst)) {
-      return { match: true, recipient: targetFirst, source: 'ancestor' };
+  // Check pills / titles inside win
+  const pills = Array.from(win.querySelectorAll('.artdeco-pill, [data-test-pill-text], .msg-connections-typeahead, [class*="pill"]'));
+  for (const p of pills) {
+    const pt = (p.innerText || p.textContent || '').toLowerCase();
+    if (pt.includes(targetFirst) || (targetFull && pt.includes(targetFull))) {
+      return { match: true, recipient: pt.trim(), source: 'pill' };
     }
-    curr = curr.parentElement;
   }
 
   return { match: false, recipient: '' };
+}
+
+// Find any message editor inside a specific window container
+function findEditorInWindow(win) {
+  if (!win) return null;
+  const selectors = [
+    'div.msg-form__contenteditable[contenteditable="true"]',
+    'div.msg-form__contenteditable',
+    '.public-DraftEditor-content[contenteditable="true"]',
+    '.public-DraftEditor-content',
+    'form.msg-form [contenteditable="true"]',
+    'div[role="textbox"][contenteditable="true"]',
+    'form.msg-form div[role="textbox"]',
+    'div[role="textbox"]',
+    '[contenteditable="true"]',
+    'textarea.msg-form__textarea',
+    'textarea[name="message"]',
+    'form.msg-form textarea',
+    'textarea',
+    'div[aria-label*="Write a message" i]',
+    'div[data-placeholder*="Write a message" i]',
+    'p[data-placeholder*="Write a message" i]'
+  ];
+
+  for (const sel of selectors) {
+    try {
+      const elements = Array.from(win.querySelectorAll(sel));
+      for (const el of elements) {
+        if (el.tagName === 'INPUT' && el.type === 'text') continue;
+        const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
+        if (ph.includes('search') || ph.includes('type a name')) continue;
+        return el;
+      }
+    } catch (e) {}
+  }
+  return null;
 }
 
 // Universal Active Chat Finder: Locates the message editor and enclosing window for targetName
@@ -686,7 +760,70 @@ function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // Find all active message editors on the page
+  // PATH 1: Top-Down Search via Recipient Pill / Header (Most reliable on modern LinkedIn)
+  // Look for any pill or title outside the main connections feed
+  const candidatePills = Array.from(document.querySelectorAll([
+    'aside.msg-overlay-container [class*="pill"]',
+    'aside.msg-overlay-container .artdeco-pill',
+    'aside.msg-overlay-container .msg-connections-typeahead',
+    'aside.msg-overlay-container .msg-entity-lockup',
+    'aside.msg-overlay-container [class*="lockup"]',
+    '.msg-overlay-conversation-bubble [class*="pill"]',
+    '.msg-overlay-conversation-bubble .artdeco-pill',
+    '.msg-overlay-conversation-bubble .msg-entity-lockup',
+    '.msg-overlay-compose-bubble [class*="pill"]',
+    '.msg-overlay-compose-bubble .artdeco-pill',
+    '[role="dialog"] [class*="pill"]',
+    '[role="dialog"] .artdeco-pill',
+    '[role="dialog"] .msg-entity-lockup'
+  ].join(',')));
+
+  for (const pill of candidatePills) {
+    const text = (pill.innerText || pill.textContent || '').toLowerCase();
+    if ((targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) || (targetFull && text.includes(targetFull))) {
+      const win = findEnclosingWindow(pill);
+      if (win) {
+        const tb = findEditorInWindow(win);
+        if (tb) {
+          console.log(`[LAW] Path 1 match: locked window for "${targetName}" via pill/lockup!`);
+          return { textbox: tb, container: win };
+        }
+      }
+    }
+  }
+
+  // PATH 2: Search all open chat bubbles in messaging overlay
+  const allBubbles = Array.from(document.querySelectorAll([
+    'aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)',
+    '.msg-overlay-conversation-bubble',
+    '.msg-overlay-compose-bubble',
+    '.msg-convo-wrapper',
+    'div[role="dialog"]',
+    '.artdeco-modal'
+  ].join(','))).filter(b => !b.closest('#law-floating-hud, header, nav, #global-nav, .global-nav') && !b.classList.contains('msg-overlay-list-bubble'));
+
+  for (const b of allBubbles) {
+    const text = (b.innerText || b.textContent || '').toLowerCase();
+    if ((targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) || (targetFull && text.includes(targetFull))) {
+      const tb = findEditorInWindow(b);
+      if (tb) {
+        console.log(`[LAW] Path 2 match: locked window for "${targetName}" via bubble content!`);
+        return { textbox: tb, container: b };
+      }
+    }
+  }
+
+  // PATH 3: If only 1 bubble is open in messaging overlay, accept it directly!
+  if (allBubbles.length === 1) {
+    const b = allBubbles[0];
+    const tb = findEditorInWindow(b);
+    if (tb) {
+      console.log(`[LAW] Path 3 match: single active bubble accepted for "${targetName}".`);
+      return { textbox: tb, container: b };
+    }
+  }
+
+  // PATH 4: Search all message editors and ascend to find targetName
   const allEditors = Array.from(document.querySelectorAll([
     'div.msg-form__contenteditable',
     'div[role="textbox"]',
@@ -705,53 +842,26 @@ function findActiveChatWindow(targetName = '') {
     if (el.tagName === 'INPUT' && el.type === 'text') return false;
     const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
     if (ph.includes('search') || ph.includes('type a name')) return false;
-    const rect = el.getBoundingClientRect();
-    return (rect.width > 30 || el.offsetWidth > 30) && (rect.height > 10 || el.offsetHeight > 10);
+    return true;
   });
 
-  if (allEditors.length === 0) return null;
-
-  // Strategy 1: Check each editor's ancestor tree to find which one contains targetName
-  for (const editor of allEditors) {
-    let curr = editor.parentElement;
-    let matchedWin = null;
-
-    for (let d = 0; d < 20 && curr && curr !== document.body && curr !== document.documentElement; d++) {
-      const text = (curr.innerText || curr.textContent || '').toLowerCase();
-      const hasFirst = targetFirst && targetFirst !== 'there' && text.includes(targetFirst);
-      const hasFull = targetFull && text.includes(targetFull);
-
-      if (hasFirst || hasFull) {
-        matchedWin = curr;
-      } else if (matchedWin) {
-        if (curr.querySelector('button[aria-label*="Close" i], button[data-control-name*="close"], header, [class*="header"]')) {
-          matchedWin = curr;
-        }
-        if (curr.getAttribute('role') === 'dialog' || curr.classList.contains('artdeco-modal') ||
-            curr.parentElement?.classList?.contains('msg-overlay-container') || curr.parentElement?.tagName === 'ASIDE') {
-          break;
-        }
+  for (const ed of allEditors) {
+    const win = findEnclosingWindow(ed);
+    if (win) {
+      const wText = (win.innerText || win.textContent || '').toLowerCase();
+      if ((targetFirst && targetFirst !== 'there' && wText.includes(targetFirst)) || (targetFull && wText.includes(targetFull))) {
+        console.log(`[LAW] Path 4 match: locked window for "${targetName}" via editor ancestor!`);
+        return { textbox: ed, container: win };
       }
-
-      if (curr.parentElement === document.body || curr.parentElement?.tagName === 'MAIN' || curr.id === 'app__container') {
-        break;
-      }
-
-      curr = curr.parentElement;
-    }
-
-    if (matchedWin) {
-      console.log(`[LAW] Successfully matched active chat for "${targetName}"!`);
-      return { textbox: editor, container: matchedWin };
     }
   }
 
-  // Strategy 2: If only 1 editor is active on page, accept it directly!
+  // If only 1 editor exists on the entire page
   if (allEditors.length === 1) {
-    const editor = allEditors[0];
-    const win = findEnclosingWindow(editor);
-    console.log(`[LAW] Single active editor on page accepted for "${targetName}".`);
-    return { textbox: editor, container: win || editor.closest('form') || editor.parentElement };
+    const ed = allEditors[0];
+    const win = findEnclosingWindow(ed);
+    console.log(`[LAW] Path 4 single editor fallback accepted for "${targetName}".`);
+    return { textbox: ed, container: win || ed.parentElement };
   }
 
   return null;
@@ -774,6 +884,7 @@ async function waitForConversationWindow(targetName = '', maxAttempts = 35) {
   }
   return null;
 }
+
 
 /**
  * Type text into LinkedIn's React / Draft.js / Lexical message editor or textarea.
