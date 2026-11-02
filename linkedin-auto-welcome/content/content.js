@@ -576,26 +576,22 @@ function findEnclosingWindow(el) {
   let candidate = null;
 
   for (let depth = 0; depth < 20 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
-    // 1. If parent is msg-overlay-container or ASIDE, curr is the chat bubble!
     if (curr.parentElement?.classList?.contains('msg-overlay-container') || curr.parentElement?.tagName === 'ASIDE') {
       if (!curr.classList.contains('msg-overlay-list-bubble')) {
         return curr;
       }
     }
 
-    // 2. Dialog or modal
     if (curr.getAttribute('role') === 'dialog' || curr.classList.contains('artdeco-modal')) {
       return curr;
     }
 
-    // 3. Known conversation / compose bubble classes
     if (curr.classList.contains('msg-overlay-conversation-bubble') ||
         curr.classList.contains('msg-overlay-compose-bubble') ||
         curr.classList.contains('msg-convo-wrapper')) {
       return curr;
     }
 
-    // 4. Container that holds a header with a close button
     if (curr.querySelector('header button, [class*="bubble-header"] button, button[aria-label*="Close" i]')) {
       candidate = curr;
     }
@@ -613,40 +609,21 @@ function findEnclosingWindow(el) {
 // Close all existing open chat / compose windows cleanly
 async function closeAllOpenChats() {
   for (let pass = 0; pass < 3; pass++) {
-    // Collect all open chat bubbles across overlay container, aside, and dialogs
-    const bubbles = Array.from(document.querySelectorAll([
-      'aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)',
-      '.msg-overlay-conversation-bubble',
-      '.msg-overlay-compose-bubble',
-      '.msg-convo-wrapper',
-      'aside > div:not(.msg-overlay-list-bubble)',
-      'div[role="dialog"]',
-      '.artdeco-modal'
-    ].join(','))).filter(b => !b.closest('#law-floating-hud, header, nav, #global-nav, .global-nav') && !b.classList.contains('msg-overlay-list-bubble'));
+    const closeButtons = Array.from(document.querySelectorAll([
+      'aside button[data-control-name*="close"]',
+      'aside button[data-control-name*="dismiss"]',
+      'aside button[aria-label*="Close" i]',
+      'aside button[aria-label*="Dismiss" i]',
+      'aside header button:last-child',
+      'aside [class*="bubble-header"] button:last-child',
+      '[role="dialog"] button[aria-label*="Close" i]',
+      '[role="dialog"] header button:last-child'
+    ].join(','))).filter(b => !b.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble'));
 
-    // Also collect any windows enclosing message editors
-    const editors = Array.from(document.querySelectorAll([
-      'div.msg-form__contenteditable',
-      'div[role="textbox"]',
-      '[contenteditable="true"]',
-      'textarea.msg-form__textarea',
-      'textarea'
-    ].join(','))).filter(el => !el.closest('#law-floating-hud, header, nav, #global-nav, .global-nav, .msg-overlay-list-bubble'));
+    if (closeButtons.length === 0) break;
 
-    for (const ed of editors) {
-      const w = findEnclosingWindow(ed);
-      if (w && !bubbles.includes(w) && !w.classList.contains('msg-overlay-list-bubble')) {
-        bubbles.push(w);
-      }
-    }
-
-    if (bubbles.length === 0) break;
-
-    for (const b of bubbles) {
-      const closeBtn = findCloseButton(b);
-      if (closeBtn) {
-        simulateClick(closeBtn);
-      }
+    for (const btn of closeButtons) {
+      simulateClick(btn);
     }
 
     await sleep(200);
@@ -695,11 +672,9 @@ async function closeConversationWindow(convoEl) {
 function verifyConversationRecipient(activeConvo, targetName) {
   if (!activeConvo || !targetName) return { match: true, recipient: '' };
   const targetFirst = extractFirstName(targetName).toLowerCase();
-  const targetFull = targetName.trim().toLowerCase();
+  const targetFull = (targetName || '').trim().toLowerCase();
 
-  const win = findEnclosingWindow(activeConvo) || activeConvo;
-  const text = (win.innerText || win.textContent || '').toLowerCase();
-
+  const text = (activeConvo.innerText || activeConvo.textContent || '').toLowerCase();
   if (targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) {
     return { match: true, recipient: targetFirst, source: 'text' };
   }
@@ -707,161 +682,140 @@ function verifyConversationRecipient(activeConvo, targetName) {
     return { match: true, recipient: targetFull, source: 'text' };
   }
 
-  // Check pills / titles inside win
-  const pills = Array.from(win.querySelectorAll('.artdeco-pill, [data-test-pill-text], .msg-connections-typeahead, [class*="pill"]'));
-  for (const p of pills) {
-    const pt = (p.innerText || p.textContent || '').toLowerCase();
-    if (pt.includes(targetFirst) || (targetFull && pt.includes(targetFull))) {
-      return { match: true, recipient: pt.trim(), source: 'pill' };
+  // Also check ancestor tree
+  let curr = activeConvo;
+  for (let d = 0; d < 8 && curr && curr !== document.body; d++) {
+    const pText = (curr.innerText || curr.textContent || '').toLowerCase();
+    if (targetFirst && targetFirst !== 'there' && pText.includes(targetFirst)) {
+      return { match: true, recipient: targetFirst, source: 'ancestor' };
     }
+    curr = curr.parentElement;
   }
 
   return { match: false, recipient: '' };
 }
 
-// Find any message editor inside a specific window container
-function findEditorInWindow(win) {
-  if (!win) return null;
-  const selectors = [
-    'div.msg-form__contenteditable[contenteditable="true"]',
-    'div.msg-form__contenteditable',
-    '.public-DraftEditor-content[contenteditable="true"]',
-    '.public-DraftEditor-content',
-    'form.msg-form [contenteditable="true"]',
-    'div[role="textbox"][contenteditable="true"]',
-    'form.msg-form div[role="textbox"]',
-    'div[role="textbox"]',
-    '[contenteditable="true"]',
-    'textarea.msg-form__textarea',
-    'textarea[name="message"]',
-    'form.msg-form textarea',
-    'textarea',
-    'div[aria-label*="Write a message" i]',
-    'div[data-placeholder*="Write a message" i]',
-    'p[data-placeholder*="Write a message" i]'
-  ];
-
-  for (const sel of selectors) {
-    try {
-      const elements = Array.from(win.querySelectorAll(sel));
-      for (const el of elements) {
-        if (el.tagName === 'INPUT' && el.type === 'text') continue;
-        const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
-        if (ph.includes('search') || ph.includes('type a name')) continue;
-        return el;
-      }
-    } catch (e) {}
-  }
-  return null;
-}
-
-// Universal Active Chat Finder: Locates the message editor and enclosing window for targetName
+// Universal Active Chat Finder using Lowest Common Ancestor (LCA)
 function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // PATH 1: Top-Down Search via Recipient Pill / Header (Most reliable on modern LinkedIn)
-  // Look for any pill or title outside the main connections feed
-  const candidatePills = Array.from(document.querySelectorAll([
-    'aside.msg-overlay-container [class*="pill"]',
-    'aside.msg-overlay-container .artdeco-pill',
-    'aside.msg-overlay-container .msg-connections-typeahead',
-    'aside.msg-overlay-container .msg-entity-lockup',
-    'aside.msg-overlay-container [class*="lockup"]',
-    '.msg-overlay-conversation-bubble [class*="pill"]',
-    '.msg-overlay-conversation-bubble .artdeco-pill',
-    '.msg-overlay-conversation-bubble .msg-entity-lockup',
-    '.msg-overlay-compose-bubble [class*="pill"]',
-    '.msg-overlay-compose-bubble .artdeco-pill',
+  // APPROACH 1: Search from recipient elements in aside / overlays
+  const allPotentialRecipients = Array.from(document.querySelectorAll([
+    'aside [class*="pill"]',
+    'aside [class*="lockup"]',
+    'aside [class*="title"]',
+    'aside [class*="typeahead"]',
+    'aside h2',
+    'aside h3',
+    'aside span',
+    'aside a',
     '[role="dialog"] [class*="pill"]',
-    '[role="dialog"] .artdeco-pill',
-    '[role="dialog"] .msg-entity-lockup'
-  ].join(',')));
-
-  for (const pill of candidatePills) {
-    const text = (pill.innerText || pill.textContent || '').toLowerCase();
-    if ((targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) || (targetFull && text.includes(targetFull))) {
-      const win = findEnclosingWindow(pill);
-      if (win) {
-        const tb = findEditorInWindow(win);
-        if (tb) {
-          console.log(`[LAW] Path 1 match: locked window for "${targetName}" via pill/lockup!`);
-          return { textbox: tb, container: win };
-        }
-      }
-    }
-  }
-
-  // PATH 2: Search all open chat bubbles in messaging overlay
-  const allBubbles = Array.from(document.querySelectorAll([
-    'aside.msg-overlay-container > div:not(.msg-overlay-list-bubble)',
-    '.msg-overlay-conversation-bubble',
-    '.msg-overlay-compose-bubble',
-    '.msg-convo-wrapper',
-    'div[role="dialog"]',
-    '.artdeco-modal'
-  ].join(','))).filter(b => !b.closest('#law-floating-hud, header, nav, #global-nav, .global-nav') && !b.classList.contains('msg-overlay-list-bubble'));
-
-  for (const b of allBubbles) {
-    const text = (b.innerText || b.textContent || '').toLowerCase();
-    if ((targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) || (targetFull && text.includes(targetFull))) {
-      const tb = findEditorInWindow(b);
-      if (tb) {
-        console.log(`[LAW] Path 2 match: locked window for "${targetName}" via bubble content!`);
-        return { textbox: tb, container: b };
-      }
-    }
-  }
-
-  // PATH 3: If only 1 bubble is open in messaging overlay, accept it directly!
-  if (allBubbles.length === 1) {
-    const b = allBubbles[0];
-    const tb = findEditorInWindow(b);
-    if (tb) {
-      console.log(`[LAW] Path 3 match: single active bubble accepted for "${targetName}".`);
-      return { textbox: tb, container: b };
-    }
-  }
-
-  // PATH 4: Search all message editors and ascend to find targetName
-  const allEditors = Array.from(document.querySelectorAll([
-    'div.msg-form__contenteditable',
-    'div[role="textbox"]',
-    '[contenteditable="true"]',
-    '.public-DraftEditor-content',
-    'form.msg-form [contenteditable="true"]',
-    'textarea.msg-form__textarea',
-    'textarea[name="message"]',
-    'form.msg-form textarea',
-    'div[aria-label*="Write a message" i]',
-    'div[data-placeholder*="Write a message" i]',
-    'p[data-placeholder*="Write a message" i]',
-    'textarea'
+    '[role="dialog"] [class*="lockup"]',
+    '[role="dialog"] [class*="title"]',
+    '[role="dialog"] h2',
+    '[role="dialog"] h3',
+    '[role="dialog"] span',
+    '[class*="msg-overlay"] [class*="pill"]',
+    '[class*="msg-overlay"] [class*="lockup"]',
+    '[class*="msg-overlay"] h2',
+    '[class*="msg-overlay"] span'
   ].join(','))).filter(el => {
     if (!el || el.closest('#law-floating-hud, header, nav, #global-nav, .global-nav, .msg-overlay-list-bubble')) return false;
-    if (el.tagName === 'INPUT' && el.type === 'text') return false;
-    const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
-    if (ph.includes('search') || ph.includes('type a name')) return false;
+    const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+    if (!txt) return false;
+    if (targetFirst && targetFirst !== 'there' && txt.includes(targetFirst)) return true;
+    if (targetFull && txt.includes(targetFull)) return true;
+    return false;
+  });
+
+  for (const recipientEl of allPotentialRecipients) {
+    let curr = recipientEl;
+    for (let depth = 0; depth < 10 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
+      const editor = curr.querySelector('form [contenteditable="true"], form div[role="textbox"], form textarea, [contenteditable="true"], div[role="textbox"], textarea');
+      const hasSend = curr.querySelector('button[type="submit"], button.msg-form__send-btn, button.msg-form__send-button, button[data-test-msg-send-btn="true"], button[data-control-name="send"]') ||
+                      Array.from(curr.querySelectorAll('button')).some(b => (b.innerText || b.textContent || '').trim().toLowerCase() === 'send');
+
+      if (editor && hasSend) {
+        console.log(`[LAW] LCA Match: found chat window for "${targetName}" from recipient element!`);
+        return { textbox: editor, container: curr };
+      }
+
+      if (curr.parentElement === document.body || curr.parentElement?.tagName === 'ASIDE' || curr.parentElement?.classList?.contains('msg-overlay-container')) {
+        if (editor) {
+          console.log(`[LAW] LCA Overlay Match: found chat bubble for "${targetName}"!`);
+          return { textbox: editor, container: curr };
+        }
+      }
+
+      curr = curr.parentElement;
+    }
+  }
+
+  // APPROACH 2: Find all send buttons and ascend to find targetName
+  const allSendBtns = Array.from(document.querySelectorAll([
+    'button[type="submit"]',
+    'button.msg-form__send-btn',
+    'button.msg-form__send-button',
+    'button[data-test-msg-send-btn="true"]',
+    'button[data-control-name="send"]'
+  ].join(','))).filter(b => {
+    if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble')) return false;
     return true;
   });
 
-  for (const ed of allEditors) {
-    const win = findEnclosingWindow(ed);
-    if (win) {
-      const wText = (win.innerText || win.textContent || '').toLowerCase();
-      if ((targetFirst && targetFirst !== 'there' && wText.includes(targetFirst)) || (targetFull && wText.includes(targetFull))) {
-        console.log(`[LAW] Path 4 match: locked window for "${targetName}" via editor ancestor!`);
-        return { textbox: ed, container: win };
+  if (allSendBtns.length === 0) {
+    const btns = Array.from(document.querySelectorAll('button')).filter(b => {
+      if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble')) return false;
+      return (b.innerText || b.textContent || '').trim().toLowerCase() === 'send';
+    });
+    allSendBtns.push(...btns);
+  }
+
+  for (const sendBtn of allSendBtns) {
+    let curr = sendBtn;
+    for (let depth = 0; depth < 12 && curr && curr !== document.body && curr !== document.documentElement; depth++) {
+      const text = (curr.innerText || curr.textContent || '').toLowerCase();
+      const hasFirst = targetFirst && targetFirst !== 'there' && text.includes(targetFirst);
+      const hasFull = targetFull && text.includes(targetFull);
+
+      if (hasFirst || hasFull) {
+        const editor = curr.querySelector('form [contenteditable="true"], form div[role="textbox"], form textarea, [contenteditable="true"], div[role="textbox"], textarea');
+        if (editor) {
+          console.log(`[LAW] SendBtn Ascend Match: locked window for "${targetName}"!`);
+          return { textbox: editor, container: curr };
+        }
       }
+
+      if (curr.parentElement === document.body || curr.parentElement?.tagName === 'ASIDE' || curr.parentElement?.classList?.contains('msg-overlay-container')) {
+        break;
+      }
+
+      curr = curr.parentElement;
     }
   }
 
-  // If only 1 editor exists on the entire page
-  if (allEditors.length === 1) {
-    const ed = allEditors[0];
-    const win = findEnclosingWindow(ed);
-    console.log(`[LAW] Path 4 single editor fallback accepted for "${targetName}".`);
-    return { textbox: ed, container: win || ed.parentElement };
+  // APPROACH 3: If only 1 send button is active on the page, accept it directly!
+  if (allSendBtns.length === 1) {
+    const sendBtn = allSendBtns[0];
+    let curr = sendBtn;
+    let windowContainer = null;
+    for (let depth = 0; depth < 10 && curr && curr !== document.body; depth++) {
+      if (curr.parentElement?.tagName === 'ASIDE' || curr.parentElement?.classList?.contains('msg-overlay-container') || curr.getAttribute('role') === 'dialog') {
+        windowContainer = curr;
+        break;
+      }
+      if (curr.querySelector('header button, [class*="header"] button, button[aria-label*="Close" i]')) {
+        windowContainer = curr;
+      }
+      curr = curr.parentElement;
+    }
+    const win = windowContainer || sendBtn.closest('form')?.parentElement || sendBtn.closest('form') || sendBtn.parentElement;
+    const editor = win.querySelector('form [contenteditable="true"], form div[role="textbox"], form textarea, [contenteditable="true"], div[role="textbox"], textarea');
+    if (editor) {
+      console.log(`[LAW] Single active send button accepted for "${targetName}".`);
+      return { textbox: editor, container: win };
+    }
   }
 
   return null;
