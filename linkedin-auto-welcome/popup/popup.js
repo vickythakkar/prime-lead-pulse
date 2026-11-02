@@ -582,12 +582,20 @@ function initPopup() {
   // Resilient LinkedIn Tab Launcher
   async function launchLinkedInTask(taskType, minAgeDays = 30) {
     const isScan = taskType === 'scan';
-    const targetPath = isScan ? '/mynetwork/invite-connect/connections' : '/mynetwork/invitation-manager/sent';
     const targetUrl = isScan 
       ? 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1'
       : `https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1&min_days=${minAgeDays}`;
     const actionName = isScan ? 'START_DOM_SCAN' : 'START_WITHDRAW_INVITES';
     const actionPayload = isScan ? { action: actionName } : { action: actionName, minAgeDays };
+
+    const isTargetPage = (url) => {
+      if (!url) return false;
+      if (isScan) {
+        return url.includes('/connections') || url.includes('/people-connections') || url.includes('/mynetwork/grow');
+      } else {
+        return url.includes('/invitation-manager');
+      }
+    };
 
     const allTabs = await chrome.tabs.query({});
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -595,12 +603,12 @@ function initPopup() {
 
     let targetTab = null;
 
-    // 1. If currently viewing a LinkedIn tab, prioritize it
-    if (currentActiveTab && currentActiveTab.url && currentActiveTab.url.includes('linkedin.com')) {
+    // 1. If currently viewing a matching target tab, prioritize it
+    if (currentActiveTab && isTargetPage(currentActiveTab.url)) {
       targetTab = currentActiveTab;
     } else {
       // 2. Look for tab matching target path
-      targetTab = allTabs.find(t => t.url && t.url.includes(targetPath));
+      targetTab = allTabs.find(t => isTargetPage(t.url));
       if (!targetTab) {
         // 3. Look for any LinkedIn tab
         targetTab = allTabs.find(t => t.url && t.url.includes('linkedin.com'));
@@ -617,7 +625,7 @@ function initPopup() {
     await chrome.tabs.update(targetTab.id, { active: true });
 
     // If tab is on another LinkedIn page, navigate directly with auto-start query parameter
-    if (!targetTab.url || !targetTab.url.includes(targetPath)) {
+    if (!isTargetPage(targetTab.url)) {
       await chrome.tabs.update(targetTab.id, { url: targetUrl });
       return;
     }

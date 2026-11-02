@@ -143,15 +143,20 @@ chrome.alarms.addListener(async (alarm) => {
   if (!isUnlimited && stats.todayCount >= Number(settings.dailyLimit)) return;
   if (runtimeState.isProcessing) return;
 
-  // Check if a LinkedIn tab is open to safely perform background scan
-  const tabs = await chrome.tabs.query({ url: 'https://*.linkedin.com/*' });
+  // Check if a LinkedIn tab on connections page is open to safely perform background scan without hijacking active feed browsing
+  const tabs = await chrome.tabs.query({ url: '*://*.linkedin.com/*' });
   if (tabs && tabs.length > 0) {
-    const connTab = tabs.find(t => t.url && t.url.includes('/connections'));
-    const targetTab = connTab || tabs[0];
-    try {
-      await chrome.tabs.sendMessage(targetTab.id, { action: 'TRIGGER_BACKGROUND_CHECK' });
-    } catch (e) {
-      // Content script may not be loaded in that tab yet
+    const connTab = tabs.find(t => t.url && (
+      t.url.includes('/connections') ||
+      t.url.includes('/people-connections') ||
+      t.url.includes('/mynetwork/grow')
+    ));
+    if (connTab) {
+      try {
+        await chrome.tabs.sendMessage(connTab.id, { action: 'TRIGGER_BACKGROUND_CHECK' });
+      } catch (e) {
+        // Content script may not be loaded in that tab yet
+      }
     }
   }
 });
@@ -237,7 +242,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const minDays = typeof message.minAgeDays === 'number' 
           ? message.minAgeDays 
           : (message.minAgeMonths ? message.minAgeMonths * 30 : 30);
-        let targetTab = allTabs.find(t => t.url && t.url.includes('/mynetwork/invitation-manager'));
+        let targetTab = allTabs.find(t => t.url && (t.url.includes('/mynetwork/invitation-manager') || t.url.includes('/invitation-manager')));
         const targetUrl = `https://www.linkedin.com/mynetwork/invitation-manager/sent/?law_withdraw=1&min_days=${minDays}`;
 
         if (targetTab) {
@@ -265,7 +270,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       if (message.action === 'START_SCAN_SESSION') {
         const allTabs = await chrome.tabs.query({});
-        let targetTab = allTabs.find(t => t.url && t.url.includes('/mynetwork/invite-connect/connections'));
+        let targetTab = allTabs.find(t => t.url && (
+          t.url.includes('/mynetwork/invite-connect/connections') ||
+          t.url.includes('/network-manager/people-connections') ||
+          t.url.includes('/mynetwork/grow') ||
+          t.url.includes('/connections')
+        ));
         const targetUrl = 'https://www.linkedin.com/mynetwork/invite-connect/connections/?law_auto=1';
 
         if (targetTab) {
