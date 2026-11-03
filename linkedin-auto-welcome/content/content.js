@@ -44,16 +44,18 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Universal DOM click simulation triggering pointer, mouse, and click event chains
+// Universal DOM click simulation triggering clean, single-action click
 function simulateClick(el) {
   if (!el) return;
   try { el.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (e) {}
   try { el.focus(); } catch (e) {}
-  try { el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
-  try { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, buttons: 1 })); } catch (e) {}
-  try { el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
-  try { el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); } catch (e) {}
-  try { el.click(); } catch (e) {}
+  try {
+    el.click();
+  } catch (e) {
+    try {
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    } catch (err) {}
+  }
 }
 
 function getRandomDelay(minSeconds, maxSeconds) {
@@ -606,41 +608,61 @@ function findEnclosingWindow(el) {
   return candidate || el.closest('form') || el.parentElement;
 }
 
-// Close all existing open chat / compose windows cleanly
+// ─────────────────────────────────────────────────────────────
+// CHAT & COMPOSE WINDOW DETECTION & MANAGEMENT
+// ─────────────────────────────────────────────────────────────
+
+// Universal Window Closer: Closes all open chat windows and dock tabs cleanly
 async function closeAllOpenChats() {
+  console.log('[LAW] Closing all open/minimized chat windows...');
   for (let pass = 0; pass < 3; pass++) {
-    const closeButtons = Array.from(document.querySelectorAll([
-      'aside button[data-control-name*="close"]',
-      'aside button[data-control-name*="dismiss"]',
-      'aside button[aria-label*="Close" i]',
-      'aside button[aria-label*="Dismiss" i]',
-      'aside header button:last-child',
-      'aside [class*="bubble-header"] button:last-child',
-      '[role="dialog"] button[aria-label*="Close" i]',
-      '[role="dialog"] header button:last-child'
-    ].join(','))).filter(b => !b.closest('#law-floating-hud, #global-nav, .global-nav, nav, .msg-overlay-list-bubble'));
+    // 1. Find all close buttons on conversation bubbles and dock items
+    // (Explicitly exclude recipient pills and our HUD)
+    const closeBtns = Array.from(document.querySelectorAll([
+      'aside.msg-overlay-container button[aria-label*="close" i]',
+      'aside.msg-overlay-container button[data-control-name*="close"]',
+      '.msg-overlay-bubble-header button:last-child',
+      '[class*="bubble-header"] button:last-child',
+      '.msg-overlay-list-bubble button[aria-label*="close" i]',
+      '.msg-overlay-conversation-bubble button[aria-label*="close" i]'
+    ].join(','))).filter(b => {
+      if (b.closest('#law-floating-hud, #global-nav, .global-nav, .artdeco-pill, [class*="pill"]')) return false;
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      // Don't click the "Messaging" tray toggle button
+      if (aria.includes('messaging') && !aria.includes('close')) return false;
+      return true;
+    });
 
-    if (closeButtons.length === 0) break;
+    // Also look for buttons with ✕ text inside aside.msg-overlay-container
+    const asideBtns = Array.from(document.querySelectorAll('aside.msg-overlay-container button, [class*="msg-overlay"] button'));
+    for (const b of asideBtns) {
+      if (b.closest('#law-floating-hud, #global-nav, .global-nav, .artdeco-pill, [class*="pill"]')) continue;
+      const txt = (b.innerText || b.textContent || '').trim();
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      if (txt === '✕' || txt === '×' || aria.includes('close conversation') || aria.includes('close chat')) {
+        if (!closeBtns.includes(b)) closeBtns.push(b);
+      }
+    }
 
-    for (const btn of closeButtons) {
-      simulateClick(btn);
+    if (closeBtns.length === 0) break;
+
+    for (const btn of closeBtns) {
+      try { btn.click(); } catch (e) {}
     }
 
     await sleep(200);
 
     // Confirm any "Discard draft?" modal prompts
-    try {
-      const discardBtns = Array.from(document.querySelectorAll('button, .artdeco-modal button')).filter(b => {
-        if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
-        const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
-        return txt === 'discard' || txt === 'discard draft';
-      });
-      for (const b of discardBtns) {
-        simulateClick(b);
-      }
-    } catch (e) {}
+    const discardBtns = Array.from(document.querySelectorAll('button, .artdeco-modal button')).filter(b => {
+      if (b.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
+      const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+      return txt === 'discard' || txt === 'discard draft';
+    });
+    for (const b of discardBtns) {
+      try { b.click(); } catch (e) {}
+    }
 
-    await sleep(250);
+    await sleep(200);
   }
 }
 
@@ -648,19 +670,19 @@ async function closeAllOpenChats() {
 async function closeConversationWindow(convoEl) {
   if (convoEl) {
     const win = findEnclosingWindow(convoEl) || convoEl;
-    const closeBtn = findCloseButton(win);
+    const closeBtn = findCloseButtonInContainer(win) || findCloseButton(win);
     if (closeBtn) {
-      simulateClick(closeBtn);
+      try { closeBtn.click(); } catch (e) {}
     }
 
     await sleep(200);
     try {
       const discard = Array.from(document.querySelectorAll('button, .artdeco-modal button')).find(b => {
-        if (b.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
+        if (b.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
         const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
         return txt === 'discard' || txt === 'discard draft';
       });
-      if (discard) simulateClick(discard);
+      if (discard) discard.click();
     } catch (e) {}
   }
 
@@ -685,96 +707,218 @@ function verifyConversationRecipient(activeConvo, targetName) {
   return { match: false, recipient: '' };
 }
 
-// Universal Active Chat Finder: Finds the message editor and window strictly for targetName
-// Helper: Find the message text editor inside a specific chat container
-// Universal Chat Window & Editor Finder using Heuristic Scoring
-function findActiveChatWindow(targetName = '') {
-  const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
-  const targetFull = (targetName || '').trim().toLowerCase();
+// Find all visible chat/compose window containers on the page
+function findOpenChatContainers() {
+  const containers = [];
+  const selectors = [
+    '.msg-overlay-conversation-bubble',
+    '.msg-overlay-compose-bubble',
+    '[class*="msg-overlay"][class*="-bubble"]',
+    'aside.msg-overlay-container > div',
+    '[role="dialog"]',
+    '.artdeco-modal'
+  ];
 
-  // Step 1: Query all editable inputs on the page
-  const allEditables = Array.from(document.querySelectorAll([
-    '.msg-form__contenteditable',
-    '.public-DraftEditor-content',
-    'div[role="textbox"][contenteditable]',
-    'div[contenteditable="true"]',
-    'div[contenteditable]',
-    'textarea.msg-form__textarea',
-    'textarea'
-  ].join(','))).filter(el => {
-    // Only exclude our HUD and the top global navigation
-    if (el.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
-    // Exclude recipient search input (typeahead)
-    if (el.closest('.msg-connections-typeahead, [class*="typeahead"]')) return false;
-    const role = el.getAttribute('role') || '';
-    if (role === 'combobox' || role === 'searchbox') return false;
-    const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
-    if (ph.includes('type a name') || ph.includes('search')) return false;
-    return true;
-  });
+  for (const el of document.querySelectorAll(selectors.join(','))) {
+    if (el.closest('#law-floating-hud, #global-nav, .global-nav')) continue;
+    if (el.classList.contains('msg-overlay-list-bubble')) continue; // docked tray
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 120 && rect.height > 120 && !containers.includes(el)) {
+      containers.push(el);
+    }
+  }
 
-  console.log(`[LAW] findActiveChatWindow: ${allEditables.length} candidate editables found for "${targetName}"`);
+  // Fallback: search for any visible card containing "New message" or "Write a message"
+  if (containers.length === 0) {
+    const textEls = Array.from(document.querySelectorAll('h2, h3, header, p, span, div')).filter(el => {
+      if (el.closest('#law-floating-hud, #global-nav, .global-nav')) return false;
+      const t = (el.innerText || el.textContent || '').trim().toLowerCase();
+      return t === 'new message' || t.startsWith('write a message');
+    });
 
-  // Step 2: For each editable, ascend to its top-level chat container (bubble, dialog, modal)
-  const candidates = [];
-  for (const ed of allEditables) {
-    // Ascend to the chat window (do NOT stop at form, go all the way to bubble/dialog)
-    let container = ed.closest([
-      '.msg-overlay-conversation-bubble',
-      '.msg-overlay-compose-bubble',
-      '.artdeco-modal',
-      '[role="dialog"]',
-      'aside.msg-overlay-container > div',
-      'aside > div'
-    ].join(','));
-
-    if (!container) {
-      let curr = ed.parentElement;
+    for (const tEl of textEls) {
+      let curr = tEl.parentElement;
       for (let i = 0; i < 15 && curr && curr !== document.body; i++) {
-        if (curr.querySelector && (
-          curr.querySelector('button[aria-label*="Close" i], button[data-control-name*="close"]') ||
-          curr.querySelector('[class*="pill"]') ||
-          curr.querySelector('header, .msg-overlay-bubble-header')
-        )) {
-          container = curr;
+        const rect = curr.getBoundingClientRect();
+        if (rect.width > 200 && rect.height > 200) {
+          if (!containers.includes(curr)) containers.push(curr);
           break;
         }
         curr = curr.parentElement;
       }
     }
-
-    if (!container) container = ed.parentElement?.parentElement?.parentElement || ed.parentElement;
-    if (container.id === 'law-floating-hud') continue;
-
-    candidates.push({ ed, container });
   }
 
-  // PASS 1: Strict recipient name match in the container text
-  for (const { ed, container } of candidates) {
-    const text = (container.innerText || container.textContent || '').toLowerCase();
-    const hasFirst = targetFirst && targetFirst !== 'there' && text.includes(targetFirst);
-    const hasFull = targetFull && text.includes(targetFull);
+  return containers;
+}
 
-    if (hasFirst || hasFull) {
-      console.log(`[LAW] Locked chat for "${targetName}" via recipient name match!`);
-      return { textbox: ed, container };
+// Find message textbox inside a specific chat container
+function findTextBoxInContainer(container) {
+  if (!container) return null;
+
+  // 1. Any contenteditable or role="textbox" (excluding recipient search typeahead)
+  const editables = Array.from(container.querySelectorAll(
+    '[contenteditable="true"], [contenteditable=""], [contenteditable], div[role="textbox"], p[role="textbox"], textarea'
+  )).filter(el => {
+    if (el.closest('.msg-connections-typeahead, [class*="typeahead"]')) return false;
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (role === 'combobox' || role === 'searchbox') return false;
+    const ph = ((el.getAttribute('placeholder') || '') + (el.getAttribute('aria-label') || '')).toLowerCase();
+    if (ph.includes('type a name') || ph.includes('search by name')) return false;
+    return true;
+  });
+
+  if (editables.length > 0) return editables[0];
+
+  // 2. Element with placeholder or aria-label containing "message"
+  const attrEl = container.querySelector(
+    '[aria-label*="message" i], [placeholder*="message" i], [data-placeholder*="message" i]'
+  );
+  if (attrEl) return attrEl;
+
+  // 3. Visible text containing "Write a message"
+  const textEls = Array.from(container.querySelectorAll('p, span, div, label')).filter(el => {
+    if (el.children.length > 2) return false;
+    const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+    return txt.startsWith('write a message');
+  });
+  if (textEls.length > 0) return textEls[0];
+
+  return null;
+}
+
+// Find Send button inside a specific chat container
+function findSendButtonInContainer(container) {
+  if (!container) return null;
+
+  // 1. Direct submit or send button classes
+  const direct = container.querySelector([
+    'button.msg-form__send-button',
+    'button.msg-form__send-btn',
+    'button[type="submit"]',
+    'button[data-test-msg-send-btn="true"]',
+    'button[data-control-name="send"]'
+  ].join(','));
+  if (direct) return direct;
+
+  // 2. Any button with text "Send" or aria-label containing "Send"
+  const allBtns = Array.from(container.querySelectorAll('button, [role="button"]'));
+  return allBtns.find(b => {
+    const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+    return txt === 'send' || aria === 'send' || aria.includes('send message');
+  }) || null;
+}
+
+// Find Close button inside a specific chat container
+function findCloseButtonInContainer(container) {
+  if (!container) return null;
+
+  // Check header buttons first (close is always the last button or has ✕)
+  const header = container.querySelector('header, .msg-overlay-bubble-header, [class*="bubble-header"], [class*="header"]');
+  if (header) {
+    const headerBtns = Array.from(header.querySelectorAll('button, [role="button"]'));
+    if (headerBtns.length > 0) {
+      const explicit = headerBtns.find(b => {
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        const txt = (b.innerText || b.textContent || '').trim();
+        return aria.includes('close') || txt === '✕' || txt === '×';
+      });
+      if (explicit) return explicit;
+      return headerBtns[headerBtns.length - 1];
     }
   }
 
-  // PASS 2: If exactly 1 chat container with an editor exists on page, accept it directly
-  if (candidates.length === 1) {
-    const { ed, container } = candidates[0];
-    console.log(`[LAW] Single open chat window accepted for "${targetName}".`);
-    return { textbox: ed, container };
+  // Fallback: any button with aria-label="Close..." (ignoring recipient pills)
+  const btns = Array.from(container.querySelectorAll('button[aria-label*="close" i], button[aria-label*="dismiss" i]')).filter(b => {
+    return !b.closest('.artdeco-pill, [class*="pill"]');
+  });
+  return btns[0] || null;
+}
+
+// Universal Active Chat Finder: Finds the message editor and window strictly for targetName
+function findActiveChatWindow(targetName = '') {
+  const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
+  const targetFull = (targetName || '').trim().toLowerCase();
+
+  const containers = findOpenChatContainers();
+
+  console.log(`[LAW] findActiveChatWindow: found ${containers.length} candidate container(s) for "${targetName}"`);
+
+  let bestContainer = null;
+  let bestScore = -1;
+
+  for (const container of containers) {
+    let score = 0;
+    const text = (container.innerText || container.textContent || '').toLowerCase();
+
+    // Recipient name match
+    if (targetFirst && targetFirst !== 'there' && text.includes(targetFirst)) score += 50;
+    if (targetFull && text.includes(targetFull)) score += 50;
+
+    // Check pills specifically
+    const pills = container.querySelectorAll('.artdeco-pill, [class*="pill"], .msg-entity-lockup');
+    for (const pill of pills) {
+      const pText = (pill.innerText || pill.textContent || '').toLowerCase();
+      if (targetFirst && targetFirst !== 'there' && pText.includes(targetFirst)) score += 30;
+      if (targetFull && pText.includes(targetFull)) score += 30;
+    }
+
+    // Compose markers
+    if (text.includes('new message')) score += 20;
+    if (text.includes('write a message')) score += 20;
+
+    const sb = findSendButtonInContainer(container);
+    if (sb) score += 15;
+
+    const tb = findTextBoxInContainer(container);
+    if (tb) score += 20;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestContainer = container;
+    }
   }
 
-  // PASS 3: Multiple containers — match one that has "New message" or "Write a message"
-  for (const { ed, container } of candidates) {
-    const text = (container.innerText || container.textContent || '').toLowerCase();
-    if (text.includes('new message') || text.includes('write a message')) {
-      console.log(`[LAW] Matched compose container for "${targetName}" via header!`);
-      return { textbox: ed, container };
-    }
+  // If we have a targetName, accept if bestScore >= 30 (has recipient or compose markers)
+  // If no targetName, accept if bestScore >= 20
+  const threshold = targetName ? 30 : 20;
+  if (bestContainer && bestScore >= threshold) {
+    const textBox = findTextBoxInContainer(bestContainer);
+    const sendBtn = findSendButtonInContainer(bestContainer);
+
+    console.log(`[LAW] ✅ LOCKED CHAT WINDOW!`, {
+      targetName,
+      bestScore,
+      hasTextBox: !!textBox,
+      hasSendBtn: !!sendBtn,
+      container: bestContainer
+    });
+
+    return {
+      textbox: textBox || bestContainer,
+      container: bestContainer,
+      sendButton: sendBtn
+    };
+  }
+
+  // Ultra-lenient fallback: if exactly 1 container is on screen, accept it!
+  if (containers.length === 1) {
+    const single = containers[0];
+    const textBox = findTextBoxInContainer(single);
+    const sendBtn = findSendButtonInContainer(single);
+
+    console.log(`[LAW] ✅ Single open window accepted via fallback!`, {
+      targetName,
+      hasTextBox: !!textBox,
+      hasSendBtn: !!sendBtn
+    });
+
+    return {
+      textbox: textBox || single,
+      container: single,
+      sendButton: sendBtn
+    };
   }
 
   return null;
@@ -782,25 +926,52 @@ function findActiveChatWindow(targetName = '') {
 
 async function waitForConversationWindow(targetName = '', maxAttempts = 35) {
   console.log(`[LAW] Waiting for conversation window for "${targetName}" (maxAttempts: ${maxAttempts})...`);
+
+  // Give LinkedIn's UI an initial moment to render the compose bubble
+  await sleep(800);
+
   for (let i = 0; i < maxAttempts; i++) {
     const res = findActiveChatWindow(targetName);
-    if (res) return res;
-
-    if (i % 3 === 0 && targetName && maxAttempts > 3) {
-      updateHud(`Opening chat with ${targetName} (${Math.round((maxAttempts - i) * 0.3)}s)...`);
+    if (res) {
+      console.log(`[LAW] ✅ Chat window found for "${targetName}" on attempt ${i + 1}/${maxAttempts}`);
+      return res;
     }
 
-    if (maxAttempts > 1) {
-      await sleep(300);
+    if (i % 5 === 0 && targetName && maxAttempts > 3) {
+      const remaining = Math.round((maxAttempts - i) * 0.35);
+      updateHud(`Opening chat with ${targetName} (${remaining}s)...`);
+    }
+
+    // Adaptive polling: slower at first (editor may still be mounting), faster later
+    if (i < 3) {
+      await sleep(500);
+    } else if (i < 10) {
+      await sleep(350);
+    } else {
+      await sleep(250);
     }
   }
+
+  // Final attempt: try one more time with a broader search (no name requirement)
+  console.log(`[LAW] Last-chance broad search for any open compose window...`);
+  const lastChance = findActiveChatWindow('');
+  if (lastChance) {
+    console.log(`[LAW] ✅ Found compose window on last-chance broad search!`);
+    return lastChance;
+  }
+
   return null;
 }
 
 
 /**
  * Type text into LinkedIn's React / Draft.js / Lexical message editor or textarea.
- * Uses native synthetic paste, line-by-line fallback, beforeinput/input events, and state wake-up.
+ * Multi-method approach:
+ *   1. execCommand('insertText') — works on most contenteditable surfaces
+ *   2. Synthetic ClipboardEvent('paste') — Draft.js intercepts this and updates ContentState
+ *   3. InputEvent dispatch — syncs React's synthetic event system
+ *   4. Direct DOM mutation fallback — last resort with manual event dispatch
+ * Verifies text presence after each method before trying the next.
  */
 async function typeIntoReactInput(element, text, container) {
   if (!element || !text) return false;
@@ -812,41 +983,82 @@ async function typeIntoReactInput(element, text, container) {
     // Native textarea or input
     if (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT') {
       element.focus();
-      element.value = text;
+      // Use React's native value setter to bypass React's synthetic event system
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        element.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype,
+        'value'
+      )?.set;
+      if (nativeInputValueSetter) {
+        nativeInputValueSetter.call(element, text);
+      } else {
+        element.value = text;
+      }
       element.dispatchEvent(new Event('input', { bubbles: true }));
       element.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
 
-    // Resolve target contenteditable
-    const target = element.hasAttribute('contenteditable')
-      ? element
-      : (element.querySelector('[contenteditable]') || element);
+    // Resolve the actual contenteditable target
+    let target = element;
+    if (!target.hasAttribute('contenteditable') || target.getAttribute('contenteditable') === 'false') {
+      const inner = element.querySelector('[contenteditable="true"], [contenteditable], div[role="textbox"]');
+      if (inner) {
+        target = inner;
+      } else {
+        const parent = element.closest('form, [class*="msg-form"]') || element.parentElement;
+        const sibling = parent ? parent.querySelector('[contenteditable="true"], [contenteditable], div[role="textbox"]') : null;
+        if (sibling) target = sibling;
+      }
+    }
 
-    target.focus();
-    await sleep(100);
-    target.click();
-    await sleep(100);
+    // Click original element to wake up editor if collapsed, then focus target
+    try { element.click(); } catch (e) {}
+    await sleep(80);
+    try { target.focus(); } catch (e) {}
+    try { target.click(); } catch (e) {}
+    await sleep(150);
 
-    // Place cursor / select all contents
+    // Helper: check if text is present in the editor
+    function hasText() {
+      const content = (target.innerText || target.textContent || '').trim();
+      // Check if at least the first 20 chars of our message appear
+      const checkStr = text.substring(0, Math.min(20, text.length)).trim();
+      return content.includes(checkStr);
+    }
+
+    // ── Method 1: execCommand('insertText') ──
+    // This is the most reliable method for modern contenteditable editors
     try {
+      target.focus();
+      // Select all existing content first
       const sel = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(target);
       sel.removeAllRanges();
       sel.addRange(range);
-    } catch (e) {}
 
-    // Method A: insertText command
-    try {
       document.execCommand('selectAll', false, null);
       document.execCommand('insertText', false, text);
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[LAW] Method 1 (execCommand insertText) failed:', e);
+    }
 
-    // Method B: Synthetic ClipboardEvent paste (Draft.js converts this directly to ContentState)
+    await sleep(200);
+    if (hasText()) {
+      console.log('[LAW] ✅ Text inserted via execCommand insertText');
+      // Fire additional events to ensure React state sync
+      _dispatchReactSyncEvents(target, text);
+      return true;
+    }
+
+    // ── Method 2: Synthetic ClipboardEvent('paste') ──
+    // Draft.js and Lexical intercept paste events and update their internal state
     try {
+      target.focus();
+      await sleep(50);
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
+      dt.setData('text/html', `<span>${text.replace(/\n/g, '<br>')}</span>`);
       const pasteEvt = new ClipboardEvent('paste', {
         clipboardData: dt,
         bubbles: true,
@@ -854,21 +1066,76 @@ async function typeIntoReactInput(element, text, container) {
         composed: true
       });
       target.dispatchEvent(pasteEvt);
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[LAW] Method 2 (synthetic paste) failed:', e);
+    }
 
-    // Method C: InputEvents for React state sync
+    await sleep(300);
+    if (hasText()) {
+      console.log('[LAW] ✅ Text inserted via synthetic paste event');
+      _dispatchReactSyncEvents(target, text);
+      return true;
+    }
+
+    // ── Method 3: InputEvent dispatch (beforeinput + insertText) ──
     try {
+      target.focus();
+      await sleep(50);
+      // Clear existing content
+      target.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true, cancelable: true, inputType: 'deleteContentBackward'
+      }));
+      // Insert new text
       target.dispatchEvent(new InputEvent('beforeinput', {
         bubbles: true, cancelable: true, inputType: 'insertText', data: text
       }));
       target.dispatchEvent(new InputEvent('input', {
         bubbles: true, inputType: 'insertText', data: text
       }));
-      target.dispatchEvent(new Event('input', { bubbles: true }));
-      target.dispatchEvent(new Event('change', { bubbles: true }));
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[LAW] Method 3 (InputEvent) failed:', e);
+    }
 
     await sleep(200);
+    if (hasText()) {
+      console.log('[LAW] ✅ Text inserted via InputEvent dispatch');
+      return true;
+    }
+
+    // ── Method 4: Direct DOM mutation + manual event dispatch (last resort) ──
+    try {
+      target.focus();
+      await sleep(50);
+      // Build proper paragraph structure for Draft.js
+      const lines = text.split('\n');
+      const html = lines.map(line => `<p>${line || '<br>'}</p>`).join('');
+      target.innerHTML = html;
+      // Place cursor at the end
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (e) {}
+      // Fire every event React/Draft.js might be listening for
+      _dispatchReactSyncEvents(target, text);
+      // Also try insertText one more time now that content is in DOM
+      try { document.execCommand('selectAll', false, null); } catch (e) {}
+      try { document.execCommand('insertText', false, text); } catch (e) {}
+    } catch (e) {
+      console.warn('[LAW] Method 4 (DOM mutation) failed:', e);
+    }
+
+    await sleep(300);
+    if (hasText()) {
+      console.log('[LAW] ✅ Text inserted via direct DOM mutation');
+      return true;
+    }
+
+    // Even if we can't confirm, the text might still be there in React's state
+    console.warn('[LAW] ⚠️ Could not confirm text insertion, but proceeding anyway');
     return true;
   } catch (err) {
     console.error('[LAW] typeIntoReactInput error:', err);
@@ -876,27 +1143,80 @@ async function typeIntoReactInput(element, text, container) {
   }
 }
 
+// Helper: dispatch all the events React/Draft.js/Lexical might need to sync internal state
+function _dispatchReactSyncEvents(target, text) {
+  try {
+    target.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true, cancelable: true, inputType: 'insertText', data: text
+    }));
+    target.dispatchEvent(new InputEvent('input', {
+      bubbles: true, inputType: 'insertText', data: text
+    }));
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    // Keyboard events to trigger any key-based listeners
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Unidentified', bubbles: true }));
+    target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Unidentified', bubbles: true }));
+    target.dispatchEvent(new KeyboardEvent('keypress', { key: 'Unidentified', bubbles: true }));
+    // Composition events (some editors use these)
+    target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+    target.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text }));
+  } catch (e) {}
+}
+
 // Find Send button strictly within the active conversation bubble / form
 function findSendButton(container, textBox) {
-  const root = container || (textBox ? textBox.closest('.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, [role="dialog"], aside > div') : null);
-  if (!root) return null;
+  // Build a prioritized list of search roots
+  const roots = [];
+  if (container && container !== document.body && container !== document.documentElement) {
+    roots.push(container);
+  }
+  if (textBox) {
+    // Also check the form that contains the textbox
+    const form = textBox.closest('form, .msg-form');
+    if (form) roots.push(form);
+    // And the enclosing bubble
+    const bubble = textBox.closest(
+      '.msg-overlay-conversation-bubble, .msg-overlay-compose-bubble, ' +
+      '[class*="msg-overlay-"][class*="-bubble"], [role="dialog"], .artdeco-modal'
+    );
+    if (bubble && !roots.includes(bubble)) roots.push(bubble);
+  }
 
-  // Prefer submit button within the form
-  const btn = root.querySelector([
-    'button[type="submit"]',
-    'button.msg-form__send-btn',
-    'button.msg-form__send-button',
-    'button[data-test-msg-send-btn="true"]',
-    'button[data-control-name="send"]'
-  ].join(','));
-  if (btn) return btn;
+  for (const root of roots) {
+    // Priority 1: Standard LinkedIn send button selectors
+    const directBtn = root.querySelector([
+      'button[type="submit"].msg-form__send-button',
+      'button.msg-form__send-button',
+      'button.msg-form__send-btn',
+      'button[type="submit"]',
+      'button[data-test-msg-send-btn="true"]',
+      'button[data-control-name="send"]'
+    ].join(','));
+    if (directBtn) return directBtn;
 
-  const allBtns = Array.from(root.querySelectorAll('button'));
-  return allBtns.find(b => {
+    // Priority 2: Button with Send text or aria-label
+    const allBtns = Array.from(root.querySelectorAll('button'));
+    const sendBtn = allBtns.find(b => {
+      const text = (b.innerText || b.textContent || '').trim().toLowerCase();
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      return text === 'send' || aria === 'send' || aria.includes('send message') ||
+             aria.includes('press enter to send');
+    });
+    if (sendBtn) return sendBtn;
+  }
+
+  // Global fallback: find any visible Send button on the page (excluding HUD / global nav)
+  const allGlobalBtns = Array.from(document.querySelectorAll('button')).filter(b => !b.closest('#law-floating-hud, #global-nav, .global-nav'));
+  const fallbackBtn = allGlobalBtns.find(b => {
     const text = (b.innerText || b.textContent || '').trim().toLowerCase();
     const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-    return text === 'send' || aria === 'send' || aria.includes('send message');
-  }) || null;
+    return text === 'send' || aria === 'send' || aria.includes('send message') ||
+           b.classList.contains('msg-form__send-button') || b.classList.contains('msg-form__send-btn');
+  });
+  if (fallbackBtn) return fallbackBtn;
+
+  return null;
 }
 
 // Test if text contains a specific keyword (supports whole-word and phrase matching)
@@ -1310,10 +1630,8 @@ async function runAutoWelcomeSequence() {
 
         if (shouldStop) break;
 
-        // Click "Message" button
+        // Click "Message" button (single click only to avoid opening duplicate windows)
         simulateClick(conn.messageButton);
-        const innerBtn = conn.messageButton.querySelector('span, .artdeco-button__text');
-        if (innerBtn) simulateClick(innerBtn);
 
         // Wait up to 35 attempts (~10.5s) for THIS recipient's window to appear
         convoResult = await waitForConversationWindow(conn.name, 35);
@@ -1323,8 +1641,20 @@ async function runAutoWelcomeSequence() {
       }
 
       if (!convoResult) {
-        updateHud(`⚠️ Chat window didn't open for ${conn.name}. Skipping...`, formatQuota(currentTodayCount, settings.dailyLimit));
-        sentMap.add(conn.profileUrl); // Don't get stuck on one contact
+        // Track failed attempts to prevent infinite retry loops
+        const attempts = contactAttempts.get(conn.profileUrl) || 0;
+        contactAttempts.set(conn.profileUrl, attempts + 1);
+
+        if (attempts + 1 >= 2) {
+          // After 2 failed attempts, permanently skip this contact
+          updateHud(`⚠️ Chat window didn't open for ${conn.name} after 2 attempts. Permanently skipping.`, formatQuota(currentTodayCount, settings.dailyLimit));
+          console.warn(`[LAW] Permanently skipping ${conn.name} after 2 failed chat-open attempts.`);
+          sentMap.add(conn.profileUrl); // Don't get stuck on one contact
+        } else {
+          updateHud(`⚠️ Chat window didn't open for ${conn.name}. Will retry once more.`, formatQuota(currentTodayCount, settings.dailyLimit));
+          console.warn(`[LAW] Chat open attempt ${attempts + 1}/2 failed for ${conn.name}.`);
+          // Do NOT add to sentMap yet so it can be retried once
+        }
         await closeAllOpenChats();
         await sleep(1000);
         continue;
@@ -1392,9 +1722,19 @@ async function runAutoWelcomeSequence() {
 
       // Find send button inside the active window
       let sendBtn = findSendButton(activeConvo, textBox);
-      for (let i = 0; i < 12; i++) {
-        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
+      // Poll up to ~3.6s for the send button to become enabled
+      for (let i = 0; i < 18; i++) {
         sendBtn = findSendButton(activeConvo, textBox);
+        if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') break;
+        // On every 3rd attempt, re-dispatch input events on the textbox to wake React state
+        if (i % 3 === 0 && textBox) {
+          try {
+            textBox.focus();
+            textBox.dispatchEvent(new Event('input', { bubbles: true }));
+            textBox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ' ' }));
+            textBox.dispatchEvent(new Event('change', { bubbles: true }));
+          } catch (e) {}
+        }
         await sleep(200);
       }
 
@@ -1405,11 +1745,20 @@ async function runAutoWelcomeSequence() {
           sendBtn.removeAttribute('disabled');
           sendBtn.removeAttribute('aria-disabled');
         }
-        // Nudge React by dispatching input event on textbox
+        // Nudge React by dispatching comprehensive events on textbox
         textBox.focus();
+        try {
+          // Re-type a space and delete it to trigger Draft.js state change
+          document.execCommand('insertText', false, ' ');
+          await sleep(100);
+          document.execCommand('delete', false, null);
+        } catch (e) {}
         textBox.dispatchEvent(new Event('input', { bubbles: true }));
         textBox.dispatchEvent(new Event('change', { bubbles: true }));
-        await sleep(300);
+        textBox.dispatchEvent(new InputEvent('input', {
+          bubbles: true, inputType: 'insertText', data: ''
+        }));
+        await sleep(400);
         sendBtn = findSendButton(activeConvo, textBox);
       }
 
@@ -1421,24 +1770,57 @@ async function runAutoWelcomeSequence() {
         sendBtn.setAttribute('aria-disabled', 'false');
         simulateClick(sendBtn);
 
-        // Poll up to 3.5s for textbox to clear (indicates message sent)
-        for (let w = 0; w < 7; w++) {
+        // Poll up to 4s for textbox to clear or window to update (indicates message sent)
+        for (let w = 0; w < 8; w++) {
           await sleep(500);
+          if (!textBox || !textBox.isConnected || !document.body.contains(textBox)) {
+            messageSuccessfullySent = true;
+            break;
+          }
+          if (activeConvo && activeConvo.querySelector('.msg-s-event-listitem, .msg-s-message-group__item, [class*="message-bubble"]')) {
+            messageSuccessfullySent = true;
+            break;
+          }
           const remainingText = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
-          if (!remainingText || remainingText.startsWith('write a message') || remainingText.length < 5) {
+          if (!remainingText || remainingText.startsWith('write a message') || remainingText.startsWith('type a message') || remainingText.length < 5) {
             messageSuccessfullySent = true;
             break;
           }
         }
 
-        // If not yet cleared, fallback to pressing Enter key
-        if (!messageSuccessfullySent) {
+        // If not yet cleared, try submitting the form directly
+        if (!messageSuccessfullySent && textBox && textBox.isConnected) {
+          try {
+            const form = textBox.closest('form') || activeConvo?.querySelector('form');
+            if (form) {
+              form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+              await sleep(800);
+              if (!textBox.isConnected || !document.body.contains(textBox)) {
+                messageSuccessfullySent = true;
+              } else {
+                const afterSubmit = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
+                if (!afterSubmit || afterSubmit.startsWith('write a message') || afterSubmit.length < 5) {
+                  messageSuccessfullySent = true;
+                }
+              }
+            }
+          } catch (e) {}
+        }
+
+        // Fallback: press Enter key (some LinkedIn UIs use Enter to send)
+        if (!messageSuccessfullySent && textBox && textBox.isConnected) {
           textBox.focus();
           textBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          textBox.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+          textBox.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
           await sleep(1500);
-          const afterEnter = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
-          if (!afterEnter || afterEnter.startsWith('write a message') || afterEnter.length < 5) {
+          if (!textBox.isConnected || !document.body.contains(textBox)) {
             messageSuccessfullySent = true;
+          } else {
+            const afterEnter = (textBox.innerText || textBox.textContent || '').trim().toLowerCase();
+            if (!afterEnter || afterEnter.startsWith('write a message') || afterEnter.startsWith('type a message') || afterEnter.length < 5) {
+              messageSuccessfullySent = true;
+            }
           }
         }
       }
