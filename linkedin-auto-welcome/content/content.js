@@ -692,75 +692,89 @@ function findActiveChatWindow(targetName = '') {
   const targetFirst = targetName ? extractFirstName(targetName).toLowerCase() : '';
   const targetFull = (targetName || '').trim().toLowerCase();
 
-  // Step 1: Find all potential editable inputs on page
-  const allEditables = Array.from(document.querySelectorAll(
-    '[contenteditable="true"], [contenteditable=""], [contenteditable], textarea, div[role="textbox"]'
-  )).filter(el => {
-    if (el.closest('#law-floating-hud, #app-container, .app-container')) return false;
-    if (el.closest('#global-nav, .global-nav, header.global-nav, nav')) return false;
-    if (el.closest('.mn-connection-card, [class*="connection-card"]')) return false;
+  // Step 1: Query all editable inputs on the page
+  const allEditables = Array.from(document.querySelectorAll([
+    '.msg-form__contenteditable',
+    '.public-DraftEditor-content',
+    'div[role="textbox"][contenteditable]',
+    'div[contenteditable="true"]',
+    'div[contenteditable]',
+    'textarea.msg-form__textarea',
+    'textarea'
+  ].join(','))).filter(el => {
+    // Only exclude our HUD and the top global navigation
+    if (el.closest('#law-floating-hud, #global-nav, .global-nav, nav')) return false;
+    // Exclude recipient search input (typeahead)
+    if (el.closest('.msg-connections-typeahead, [class*="typeahead"]')) return false;
     const role = el.getAttribute('role') || '';
     if (role === 'combobox' || role === 'searchbox') return false;
     const ph = (el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || el.getAttribute('aria-label') || '').toLowerCase();
-    if (ph.includes('search') || ph.includes('type a name')) return false;
+    if (ph.includes('type a name') || ph.includes('search')) return false;
     return true;
   });
 
-  // Step 2: Score each candidate based on chat window signals
-  const scored = [];
+  console.log(`[LAW] findActiveChatWindow: ${allEditables.length} candidate editables found for "${targetName}"`);
 
+  // Step 2: For each editable, ascend to its top-level chat container (bubble, dialog, modal)
+  const candidates = [];
   for (const ed of allEditables) {
-    let win = ed.closest([
+    // Ascend to the chat window (do NOT stop at form, go all the way to bubble/dialog)
+    let container = ed.closest([
       '.msg-overlay-conversation-bubble',
       '.msg-overlay-compose-bubble',
       '.artdeco-modal',
       '[role="dialog"]',
       'aside.msg-overlay-container > div',
-      'aside > div',
-      'form.msg-form',
-      'form'
+      'aside > div'
     ].join(','));
 
-    if (!win) {
-      let p = ed.parentElement;
-      for (let depth = 0; depth < 12 && p && p !== document.body; depth++) {
-        if (p.querySelector && p.querySelector('button[aria-label*="Close" i], button[data-control-name*="close"], [class*="pill"]')) {
-          win = p;
+    if (!container) {
+      let curr = ed.parentElement;
+      for (let i = 0; i < 15 && curr && curr !== document.body; i++) {
+        if (curr.querySelector && (
+          curr.querySelector('button[aria-label*="Close" i], button[data-control-name*="close"]') ||
+          curr.querySelector('[class*="pill"]') ||
+          curr.querySelector('header, .msg-overlay-bubble-header')
+        )) {
+          container = curr;
           break;
         }
-        p = p.parentElement;
+        curr = curr.parentElement;
       }
     }
 
-    const container = win || ed.parentElement?.parentElement || ed.parentElement;
-    const cText = (container.innerText || container.textContent || '').toLowerCase();
+    if (!container) container = ed.parentElement?.parentElement?.parentElement || ed.parentElement;
+    if (container.id === 'law-floating-hud') continue;
 
-    let score = 0;
-
-    // Target recipient name match (+100 for first name, +100 for full name)
-    if (targetFirst && targetFirst !== 'there' && cText.includes(targetFirst)) score += 100;
-    if (targetFull && cText.includes(targetFull)) score += 100;
-
-    // "Write a message" placeholder signal
-    const ph = (ed.getAttribute('placeholder') || ed.getAttribute('data-placeholder') || ed.getAttribute('aria-label') || '').toLowerCase();
-    if (ph.includes('write a message') || cText.includes('write a message')) score += 50;
-
-    // Send button nearby signal
-    if (container.querySelector && container.querySelector('button[type="submit"], button.msg-form__send-button, button[aria-label*="send" i]')) score += 50;
-    if (cText.includes('send')) score += 20;
-
-    // Compose title signal
-    if (cText.includes('new message')) score += 30;
-
-    scored.push({ ed, container, score });
+    candidates.push({ ed, container });
   }
 
-  scored.sort((a, b) => b.score - a.score);
+  // PASS 1: Strict recipient name match in the container text
+  for (const { ed, container } of candidates) {
+    const text = (container.innerText || container.textContent || '').toLowerCase();
+    const hasFirst = targetFirst && targetFirst !== 'there' && text.includes(targetFirst);
+    const hasFull = targetFull && text.includes(targetFull);
 
-  if (scored.length > 0 && scored[0].score >= 50) {
-    const best = scored[0];
-    console.log(`[LAW] Locked chat for "${targetName}" with score ${best.score}!`);
-    return { textbox: best.ed, container: best.container };
+    if (hasFirst || hasFull) {
+      console.log(`[LAW] Locked chat for "${targetName}" via recipient name match!`);
+      return { textbox: ed, container };
+    }
+  }
+
+  // PASS 2: If exactly 1 chat container with an editor exists on page, accept it directly
+  if (candidates.length === 1) {
+    const { ed, container } = candidates[0];
+    console.log(`[LAW] Single open chat window accepted for "${targetName}".`);
+    return { textbox: ed, container };
+  }
+
+  // PASS 3: Multiple containers — match one that has "New message" or "Write a message"
+  for (const { ed, container } of candidates) {
+    const text = (container.innerText || container.textContent || '').toLowerCase();
+    if (text.includes('new message') || text.includes('write a message')) {
+      console.log(`[LAW] Matched compose container for "${targetName}" via header!`);
+      return { textbox: ed, container };
+    }
   }
 
   return null;
