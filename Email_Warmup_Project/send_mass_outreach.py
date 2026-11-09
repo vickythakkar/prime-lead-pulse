@@ -17,7 +17,6 @@ from googleapiclient.discovery import build
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1GAecP1KrbM_ehj8RjUN9cuEpk0lB7l-1-t_TikAShOs")
 SERVICE_ACCOUNT_FILE = "service_account.json"
 
-# ── Logging Setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)5s  %(message)s",
@@ -25,10 +24,41 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Tracking pixel (set to your Vercel domain) ────────────────────────────
+# ==========================================
+# PRIME LEAD PULSE TRACKING CONFIGURATION
+# ==========================================
+SUPABASE_URL = "https://rnvueftjthxxiliusvxi.supabase.co"
+SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJudnVlZnRqdGh4eGlsaXVzdnhpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MDY5OTAwNSwiZXhwIjoyMTA2Mjc1MDA1fQ.hcBL1JMsIklUik8Ff8AaFFGspI4nW44u5LNxwhg_8vo"
+USER_ID = "c1c2bf03-e1de-432e-bad6-ed184b31c939"
 TRACKING_ENABLED = True
-TRACKING_URL      = "https://props-platform-api.vercel.app/api/track"
-TRACKING_CTX      = "prime-realops-outreach"   # campaign label for the dashboard
+# ==========================================
+
+import requests
+
+def register_email_in_tracker(to_email, subject, from_user):
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    data = {
+        "user_id": USER_ID,
+        "sender_email": from_user,
+        "recipient": to_email,
+        "subject": subject
+    }
+    try:
+        response = requests.post(f"{SUPABASE_URL}/rest/v1/emails", headers=headers, json=data)
+        response.raise_for_status()
+        email_id = response.json()[0]["id"]
+        return f'<img src="https://prime-lead-pulse-sigma.vercel.app/api/track/pixel/{email_id}" width="1" height="1" style="display:none;" />'
+    except Exception as e:
+        import logging
+        log = logging.getLogger(__name__)
+        log.error(f"Failed to register email with tracker: {e}")
+        return ""
+
 
 SENT_FOLDER_CANDIDATES = ["Sent", "Sent Items", "INBOX.Sent", "[Gmail]/Sent Mail"]
 
@@ -39,10 +69,12 @@ Hi {name},
 
 Your highest value as a broker is closing deals and scaling your team, not getting bogged down by backend administration and paperwork.
 
-At Prime Real Ops, we function as your complete backend engine. We plug directly into your existing platforms to handle the heavy lifting across three core areas:
-- Listing Management
-- Transaction Coordination
-- Executive Services
+At Prime Real Ops, we function as your complete backend engine. We plug directly into your existing platforms to handle the heavy lifting across four core areas:
+- Prime Lead Bridge: Our Robust backend mechanism that routes callers and enquirers directly to the sellers in real time, so no lead is missed 24/7. You can set it up to ring to you or any agent in your firm if you prefer.
+- PrimeOS (Our Proprietary Brokerage Engine): A complete, white-labeled real estate management platform built to run your entire brokerage. PrimeOS delivers a fully branded dashboard for your sellers, agents, and admins. It automates listing creation, tracks multi-state MLS compliance, processes payments, manages agent commission splits, and centralizes all communications, giving you ultimate visibility and control over your revenue pipeline.
+- Listing Management: Flawless MLS data entry and compliance checks with a 100% accuracy guarantee.
+- Transaction Coordination: Seamless contract-to-close management to keep your clients happy and ensure on-time closings.
+- Executive Services: Dedicated, elite real estate VAs to manage your inbox, CRM, and daily operational friction.
 
 With our 72-Hour Rapid Deployment, we can take this off your plate seamlessly with minimal onboarding downtime.
 
@@ -73,7 +105,7 @@ def get_html_signature(name, is_founder):
         <p style="margin: 0 0 10px 0;">
           <a href="https://instagram.com/v.p.thakkar" style="text-decoration: none; margin-right: 6px;"><img src="https://cdn-icons-png.flaticon.com/512/174/174855.png" width="18" height="18" alt="Instagram"></a>
           <a href="https://www.linkedin.com/company/prime-real-ops/" style="text-decoration: none; margin-right: 6px;"><img src="https://cdn-icons-png.flaticon.com/512/174/174857.png" width="18" height="18" alt="LinkedIn"></a>
-          <a href="https://wa.me/16786789750" style="text-decoration: none;"><img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" width="18" height="18" alt="WhatsApp"></a>
+          <a href="https://wa.me/19298338166" style="text-decoration: none;"><img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" width="18" height="18" alt="WhatsApp"></a>
         </p>
         <p style="margin: 0; font-size: 12px; font-weight: bold; line-height: 1.6; font-family: Georgia, serif; color: #333333;">
           "Jack of all trades, master of none,<br>But oftentimes better than a master of one."
@@ -116,7 +148,7 @@ def get_html_signature(name, is_founder):
         <p style="margin: 0 0 10px 0; font-size: 13px; font-weight: bold;">
           <a href="https://www.linkedin.com/company/prime-real-ops/" style="text-decoration: none; color: #0056b3; vertical-align: middle;"><img src="https://cdn-icons-png.flaticon.com/512/174/174857.png" width="16" height="16" alt="LinkedIn" style="vertical-align: middle; margin-bottom: 2px;"> LinkedIn</a>
           <span style="color: #999999; margin: 0 5px;">|</span>
-          <a href="https://wa.me/16786789750" style="text-decoration: none; color: #0056b3; vertical-align: middle;"><img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" width="16" height="16" alt="WhatsApp" style="vertical-align: middle; margin-bottom: 2px;"> WhatsApp</a>
+          <a href="https://wa.me/19298338166" style="text-decoration: none; color: #0056b3; vertical-align: middle;"><img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" width="16" height="16" alt="WhatsApp" style="vertical-align: middle; margin-bottom: 2px;"> WhatsApp</a>
         </p>
         <p style="margin: 0; font-size: 12px; font-style: italic; font-weight: bold; line-height: 1.6; font-family: Georgia, serif; color: #000000;">
           "Jack of all trades, master of none,<br>But oftentimes better than a master of one."
@@ -150,10 +182,11 @@ def get_email_body_html(to_name, sender_name, is_founder):
     <p style="margin-bottom: 20px;">At <a href="https://primerealops.com" class="blue-link">Prime Real Ops</a>, we function as your complete backend engine. We plug directly into your existing platforms to handle the heavy lifting across four core areas:</p>
 
     <ul style="margin-bottom: 20px; padding-left: 20px;">
+      <li style="margin-bottom: 10px;"><strong>Prime Lead Bridge:</strong> Our Robust backend mechanism that routes callers and enquirers directly to the sellers in real time, so no lead is missed 24/7. You can set it up to ring to you or any agent in your firm if you prefer.</li>
+      <li style="margin-bottom: 10px;"><strong>PrimeOS (Our Proprietary Brokerage Engine):</strong> A complete, white-labeled real estate management platform built to run your entire brokerage. PrimeOS delivers a fully branded dashboard for your sellers, agents, and admins. It automates listing creation, tracks multi-state MLS compliance, processes payments, manages agent commission splits, and centralizes all communications, giving you ultimate visibility and control over your revenue pipeline.</li>
       <li style="margin-bottom: 10px;"><strong>Listing Management:</strong> Flawless MLS data entry and compliance checks with a 100% accuracy guarantee.</li>
       <li style="margin-bottom: 10px;"><strong>Transaction Coordination:</strong> Seamless contract-to-close management to keep your clients happy and ensure on-time closings.</li>
       <li style="margin-bottom: 10px;"><strong>Executive Services:</strong> Dedicated, elite real estate VAs to manage your inbox, CRM, and daily operational friction.</li>
-      <li style="margin-bottom: 10px;"><strong>Prime Lead Bridge:</strong> Our Robust backend mechanism that routes the callers and enquirers directly to the sellers in real time so no lead is missed 24/7. You can set it up to ring to you or any agent in your firm if you prefer it to.</li>
     </ul>
 
     <p style="margin-bottom: 20px;">With our 72-Hour Rapid Deployment, we can take this off your plate seamlessly with minimal onboarding downtime.</p>
@@ -247,13 +280,8 @@ def build_message(to_name, to_email, from_user, sender_name, is_founder):
 
     # Inject tracking pixel if enabled
     if TRACKING_ENABLED:
-        # Base64url-encode the recipient identifier as required by the dashboard
-        encoded_email = base64.urlsafe_b64encode(to_email.encode()).decode().rstrip("=")
-        pixel_tag = (
-            f'<img src="{TRACKING_URL}?id={encoded_email}&ctx={TRACKING_CTX}" '
-            f'width="1" height="1" alt="" style="display:none" />'
-        )
-        body_html = body_html.replace("</body>", f"{pixel_tag}\n</body>")
+        pixel_html = register_email_in_tracker(to_email, subject, from_user)
+        body_html = body_html.replace("</body>", f"{pixel_html}\n</body>")
 
     # ── Build final message ──────────────────────────────────────────
     msg = MIMEMultipart("alternative")
