@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isRequestFromSender } from '@/utils/senderCookie';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -56,6 +57,11 @@ export async function GET(
 
     if (emailError || !emailData) {
       return new NextResponse('Invalid tracking ID', { status: 404 });
+    }
+
+    // SENDER EXCLUSION: Never record a click when the sender themselves clicks the link
+    if (await isRequestFromSender(request, emailData)) {
+      return NextResponse.redirect(targetUrl);
     }
 
     // REMOVED 5-second bot filter because users testing the app manually will click links instantly

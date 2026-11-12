@@ -4,9 +4,13 @@
 //  - Duplicate button injection (check DOM, not dataset)
 //  - Reduced polling (15s instead of 3s)
 //  - Removed redundant CHECK_NOTIFICATIONS (background alarm handles it)
+//  - Self-open & self-click prevention for sender accounts
 // ============================================================
 
 const PRIME_STYLE_ID = 'prime-lead-pulse-styles';
+const PLP_TRANSPARENT_GIF = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const PLP_OWN_MAP_KEY = '__plp_own_email_map';
+const PLP_BROWSER_SENDERS_KEY = '__plp_browser_senders';
 
 // ------ Inject global CSS once ------
 if (!document.getElementById(PRIME_STYLE_ID)) {
@@ -160,12 +164,103 @@ if (!document.getElementById(PRIME_STYLE_ID)) {
 
 // ------ State ------
 let emailCache = []; // [{id, subject, recipient, sender_email, opens, clicks, status, events}]
+let ownEmailMap = {}; // { [emailId]: sender_email }
 let panelEmailId = null;
 let hasFetchedOnce = false; // Prevents premature "Untracked" badges before first data load
 let knownUserEmails = new Set();
 
+function loadPersistedSelfSendersIntoSet() {
+  try {
+    const raw = window.localStorage.getItem(PLP_BROWSER_SENDERS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        arr.forEach(s => {
+          if (typeof s === 'string' && s.includes('@') && s !== 'unknown') {
+            knownUserEmails.add(s.toLowerCase().trim());
+          }
+        });
+      }
+    }
+  } catch (_) {}
+}
+
+function syncSelfStateToPage(extraEmailId, extraSender) {
+  try {
+    if (extraEmailId && extraSender && extraSender !== 'unknown') {
+      ownEmailMap[extraEmailId] = extraSender.toLowerCase().trim();
+    }
+    if (extraSender && extraSender.includes('@') && extraSender !== 'unknown') {
+      knownUserEmails.add(extraSender.toLowerCase().trim());
+    }
+
+    const mergedSenders = new Set(knownUserEmails);
+    try {
+      const existingRaw = window.localStorage.getItem(PLP_BROWSER_SENDERS_KEY);
+      if (existingRaw) {
+        const existingArr = JSON.parse(existingRaw);
+        if (Array.isArray(existingArr)) {
+          existingArr.forEach(s => {
+            if (typeof s === 'string' && s.includes('@') && s !== 'unknown') {
+              mergedSenders.add(s.toLowerCase().trim());
+            }
+          });
+        }
+      }
+    } catch (_) {}
+
+    const activeEmail = getActiveSenderEmail();
+    if (activeEmail && activeEmail.includes('@') && activeEmail !== 'unknown') {
+      mergedSenders.add(activeEmail.toLowerCase().trim());
+      knownUserEmails.add(activeEmail.toLowerCase().trim());
+    }
+
+    let mergedMap = {};
+    try {
+      const existingMapRaw = window.localStorage.getItem(PLP_OWN_MAP_KEY);
+      if (existingMapRaw) mergedMap = JSON.parse(existingMapRaw) || {};
+    } catch (_) {}
+
+    Object.assign(mergedMap, ownEmailMap);
+    for (const e of emailCache) {
+      if (e && e.id && e.sender_email) {
+        mergedMap[e.id] = e.sender_email.toLowerCase().trim();
+      }
+    }
+    if (extraEmailId && extraSender) {
+      mergedMap[extraEmailId] = extraSender.toLowerCase().trim();
+    }
+
+    const keys = Object.keys(mergedMap);
+    if (keys.length > 2500) {
+      const trimmed = {};
+      for (const k of keys.slice(keys.length - 2500)) {
+        trimmed[k] = mergedMap[k];
+      }
+      mergedMap = trimmed;
+    }
+
+    ownEmailMap = mergedMap;
+    window.localStorage.setItem(PLP_OWN_MAP_KEY, JSON.stringify(mergedMap));
+    window.localStorage.setItem(PLP_BROWSER_SENDERS_KEY, JSON.stringify(Array.from(mergedSenders)));
+    window.dispatchEvent(new CustomEvent('plp-sync-self-state'));
+  } catch (_) {}
+}
+
+function registerBrowserSender(email) {
+  if (!email || typeof email !== 'string') return;
+  const clean = email.toLowerCase().trim();
+  if (!clean.includes('@') || clean === 'unknown') return;
+  knownUserEmails.add(clean);
+  syncSelfStateToPage(null, clean);
+  try {
+    chrome.runtime.sendMessage({ action: 'REGISTER_BROWSER_SENDER', email: clean }).catch?.(() => {});
+  } catch (_) {}
+}
+
 function updateKnownUserEmails() {
-  chrome.storage.local.get(['session', 'sessions'], data => {
+  loadPersistedSelfSendersIntoSet();
+  chrome.storage.local.get(['session', 'sessions', 'browserSenders', 'ownEmailMap'], data => {
     if (data.session?.user?.email) knownUserEmails.add(data.session.user.email.toLowerCase());
     if (data.sessions) {
       Object.keys(data.sessions).forEach(em => knownUserEmails.add(em.toLowerCase()));
@@ -173,6 +268,15 @@ function updateKnownUserEmails() {
         if (s.user?.email) knownUserEmails.add(s.user.email.toLowerCase());
       });
     }
+    if (Array.isArray(data.browserSenders)) {
+      data.browserSenders.forEach(s => {
+        if (typeof s === 'string' && s.includes('@')) knownUserEmails.add(s.toLowerCase().trim());
+      });
+    }
+    if (data.ownEmailMap && typeof data.ownEmailMap === 'object') {
+      Object.assign(ownEmailMap, data.ownEmailMap);
+    }
+    syncSelfStateToPage();
   });
 }
 updateKnownUserEmails();
@@ -201,15 +305,19 @@ function formatEventTime(iso) {
 function getActiveSenderEmail(composeWindow) {
   // 1. If compose window has an explicit "from" dropdown input (multi-send-as identities)
   if (composeWindow) {
-    const fromInput = composeWindow.querySelector('input[name="from"], select[name="from"]');
-    if (fromInput && fromInput.value) {
-      const match = fromInput.value.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+    const fromInput = composeWindow.querySelector('input[name="from"], select[name="from"], .az2 span[email]');
+    if (fromInput) {
+      const rawVal = fromInput.value || fromInput.getAttribute('email') || fromInput.textContent || '';
+      const match = rawVal.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
       if (match) return match[1].toLowerCase();
     }
   }
 
-  // 2. Active Gmail user account profile button (top-right of screen)
-  const accountBtn = document.querySelector('a[aria-label*="@"], button[aria-label*="@"], [aria-label*="Google Account" i]');
+  // 2. Active Gmail user account profile button (top-right Google Account button)
+  const accountBtn =
+    document.querySelector('[aria-label*="Google Account" i]') ||
+    document.querySelector('a[href*="SignOutOptions"][aria-label*="@"], a[href*="accounts.google.com"][aria-label*="@"]') ||
+    document.querySelector('a.gb_B[aria-label*="@"], button[aria-label*="@"]');
   if (accountBtn) {
     const label = accountBtn.getAttribute('aria-label') || '';
     const match = label.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
@@ -220,12 +328,127 @@ function getActiveSenderEmail(composeWindow) {
   const titleMatch = document.title.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
   if (titleMatch) return titleMatch[1].toLowerCase();
 
-  // 4. Fallback to known user sessions in extension storage
+  // 4. Generic fallback selector
+  const genericBtn = document.querySelector('a[aria-label*="@"]');
+  if (genericBtn) {
+    const label = genericBtn.getAttribute('aria-label') || '';
+    const match = label.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+    if (match) return match[1].toLowerCase();
+  }
+
+  // 5. Fallback to known user sessions in extension storage
   if (knownUserEmails && knownUserEmails.size > 0) {
     return Array.from(knownUserEmails)[0].toLowerCase();
   }
 
   return 'unknown';
+}
+
+function getAllSelfEmails() {
+  const selfSet = new Set(knownUserEmails);
+  const active = getActiveSenderEmail();
+  if (active && active !== 'unknown') selfSet.add(active.toLowerCase());
+  try {
+    const raw = window.localStorage.getItem(PLP_BROWSER_SENDERS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        arr.forEach(s => {
+          if (typeof s === 'string' && s.includes('@')) selfSet.add(s.toLowerCase().trim());
+        });
+      }
+    }
+  } catch (_) {}
+  return selfSet;
+}
+
+function isSelfTrackedEntity(emailId, cardSenderEmail) {
+  const selfEmails = getAllSelfEmails();
+  if (cardSenderEmail && selfEmails.has(cardSenderEmail.toLowerCase().trim())) {
+    return true;
+  }
+  if (emailId) {
+    const cachedRecord = emailCache.find(e => e.id === emailId);
+    const sender = (cachedRecord?.sender_email || ownEmailMap[emailId] || '').toLowerCase().trim();
+    if (sender && sender !== 'unknown' && selfEmails.has(sender)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function extractTrackedLinkInfo(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  try {
+    let urlObj = new URL(rawUrl, window.location.origin);
+
+    // Unwrap Gmail's google.com/url?q=... saferedirect wrapper if present
+    if (urlObj.hostname.endsWith('google.com') && urlObj.pathname === '/url') {
+      const inner = urlObj.searchParams.get('q') || urlObj.searchParams.get('url');
+      if (inner) {
+        urlObj = new URL(inner);
+      }
+    }
+
+    const match = urlObj.pathname.match(/\/api\/track\/link\/([a-zA-Z0-9_-]+)/i);
+    if (!match) return null;
+
+    const targetUrl = urlObj.searchParams.get('url');
+    if (!targetUrl || (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://'))) {
+      return null;
+    }
+
+    return { emailId: match[1], targetUrl };
+  } catch (_) {
+    return null;
+  }
+}
+
+function extractPixelEmailId(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const match = rawUrl.match(/\/api\/track\/pixel\/([a-zA-Z0-9_-]+)/i);
+  return match ? match[1] : null;
+}
+
+function scrubSelfTrackingInView() {
+  const cards = document.querySelectorAll('.adn, .a3s');
+  cards.forEach(node => {
+    if (node.closest('[contenteditable="true"], [g_editable="true"], div[role="dialog"], .M9')) return;
+
+    const card = node.closest('.adn');
+    const cardSenderEmail = card ? card.querySelector('.gD')?.getAttribute('email') : null;
+
+    // 1. Neutralize self tracking pixels
+    const imgs = node.querySelectorAll('img[src*="/api/track/pixel/"], img[data-surl*="/api/track/pixel/"]');
+    imgs.forEach(img => {
+      const src = img.getAttribute('src') || '';
+      const surl = img.getAttribute('data-surl') || '';
+      const emailId = extractPixelEmailId(src) || extractPixelEmailId(surl);
+      if (isSelfTrackedEntity(emailId, cardSenderEmail)) {
+        img.setAttribute('src', PLP_TRANSPARENT_GIF);
+        if (surl) img.removeAttribute('data-surl');
+        img.dataset.plpSelfBlocked = '1';
+      }
+    });
+
+    // 2. Unwrap self tracked links so clicking or copying never hits /api/track/link/
+    const links = node.querySelectorAll('a[href*="/api/track/link/"], a[data-saferedirecturl*="/api/track/link/"]');
+    links.forEach(a => {
+      const info =
+        extractTrackedLinkInfo(a.getAttribute('href') || a.href) ||
+        extractTrackedLinkInfo(a.getAttribute('data-saferedirecturl'));
+      if (!info) return;
+
+      if (isSelfTrackedEntity(info.emailId, cardSenderEmail)) {
+        a.setAttribute('href', info.targetUrl);
+        a.href = info.targetUrl;
+        if (a.hasAttribute('data-saferedirecturl')) {
+          a.removeAttribute('data-saferedirecturl');
+        }
+        a.dataset.plpUnwrapped = '1';
+      }
+    });
+  });
 }
 
 function recipientMatchesThread(eRecipient, participantEmails, participantNames, senderText) {
@@ -375,11 +598,18 @@ function findEmail(subject, recipientEmailOrArray) {
 let statsError = null;
 
 async function fetchEmailStats() {
-  let senderEmail = getActiveSenderEmail(); if (senderEmail) senderEmail = senderEmail.toLowerCase();
+  let senderEmail = getActiveSenderEmail();
+  if (senderEmail) senderEmail = senderEmail.toLowerCase();
+  if (senderEmail && senderEmail !== 'unknown') {
+    registerBrowserSender(senderEmail);
+  }
   return new Promise(resolve => {
     chrome.runtime.sendMessage({ action: 'GET_STATS', senderEmail }, response => {
       if (response && response.success) {
         statsError = null;
+        if (response.data.ownEmailMap && typeof response.data.ownEmailMap === 'object') {
+          Object.assign(ownEmailMap, response.data.ownEmailMap);
+        }
         emailCache = response.data.emails.map(email => {
           const opens = (email.tracking_events || []).filter(e => e.event_type === 'open');
           const clicks = (email.tracking_events || []).filter(e => e.event_type === 'click');
@@ -388,9 +618,11 @@ async function fetchEmailStats() {
           else if (opens.length > 0) status = 'Opened';
           return { ...email, opens: opens.length, clicks: clicks.length, status, events: email.tracking_events || [] };
         });
+        syncSelfStateToPage();
         console.log(`Prime Lead Pulse: Cache loaded with ${emailCache.length} tracked emails.`);
         // Force a UI refresh now that we have new data
         setTimeout(() => {
+          scrubSelfTrackingInView();
           injectSentBadges();
           injectEmailViewFeatures();
         }, 100);
@@ -443,7 +675,7 @@ function injectSentBadges() {
       });
 
       const currentUser = (getActiveSenderEmail() || '').toLowerCase();
-      if (currentUser) knownUserEmails.add(currentUser);
+      if (currentUser && currentUser !== 'unknown') knownUserEmails.add(currentUser);
 
       const isCurrentUserParticipant = (currentUser && participantEmails.includes(currentUser)) ||
                                        participantEmails.some(em => knownUserEmails.has(em));
@@ -634,6 +866,7 @@ function injectEmailViewFeatures() {
   }
 
   // Inject "View Activity (N)" button in thread view
+  const selfEmails = getAllSelfEmails();
   const dateRows = document.querySelectorAll('.g3');
   dateRows.forEach(dateEl => {
     if (dateEl.dataset.plpBtn) return;
@@ -643,8 +876,7 @@ function injectEmailViewFeatures() {
     if (emailCard) {
       const senderEl = emailCard.querySelector('.gD');
       const senderEmail = senderEl ? senderEl.getAttribute('email') : null;
-      const currentEmail = getActiveSenderEmail();
-      if (senderEmail && currentEmail && senderEmail.toLowerCase() !== currentEmail.toLowerCase()) {
+      if (senderEmail && selfEmails.size > 0 && !selfEmails.has(senderEmail.toLowerCase().trim())) {
         return;
       }
     }
@@ -862,11 +1094,18 @@ function prepareEmailTracking(compose) {
   const emailId = crypto.randomUUID();
   const base = "https://prime-lead-pulse-sigma.vercel.app";
 
+  // Immediately register sender + emailId in synchronous page state so pixel-blocker
+  // blocks any immediate "View message" / Sent view open even milliseconds after send.
+  if (senderEmail && senderEmail !== 'unknown') {
+    registerBrowserSender(senderEmail);
+  }
+  syncSelfStateToPage(emailId, senderEmail);
+
   try {
     const body = compose.querySelector('div[aria-label="Message Body"], div[contenteditable="true"], .Am.Al.editable');
     if (body) {
       // Prevent data distortion in replies by removing old tracking pixels
-      const oldPixels = body.querySelectorAll('img[src*="/api/track/pixel/"]');
+      const oldPixels = body.querySelectorAll('img[src*="/api/track/pixel/"], img[data-surl*="/api/track/pixel/"], img[data-plp-self-blocked]');
       oldPixels.forEach(img => img.remove());
 
       // Prevent double-wrapping of links in quoted text by restoring their original URLs first
@@ -874,7 +1113,7 @@ function prepareEmailTracking(compose) {
         if (a.href && a.href.includes('/api/track/link/')) {
           try {
             const urlParam = new URL(a.href).searchParams.get('url');
-            if (urlParam) a.href = decodeURIComponent(urlParam);
+            if (urlParam) a.href = urlParam;
           } catch (e) {}
         }
       });
@@ -899,8 +1138,8 @@ function prepareEmailTracking(compose) {
       body.querySelectorAll('a').forEach(a => {
         const rawHref = a.getAttribute('href') || a.href;
         if (!rawHref) return;
-        const skipProtocols = ['mailto:', 'tel:', 'javascript:', '#'];
-        if (skipProtocols.some(p => rawHref.startsWith(p))) return;
+        const lowerHref = rawHref.trim().toLowerCase();
+        if (!lowerHref.startsWith('http://') && !lowerHref.startsWith('https://')) return;
         if (rawHref.includes('/api/track/link/')) return;
         
         a.href = `${base}/api/track/link/${emailId}?url=${encodeURIComponent(rawHref)}`;
@@ -973,6 +1212,41 @@ function prepareEmailTracking(compose) {
   }
 }
 
+// ------ Self-Click Intercept Guard (click, auxclick, contextmenu) ------
+function handleSelfLinkGuard(e) {
+  const a = e.target?.closest?.('a');
+  if (!a) return;
+  if (a.closest('[contenteditable="true"], [g_editable="true"]')) return;
+
+  const info =
+    extractTrackedLinkInfo(a.getAttribute('href') || a.href) ||
+    extractTrackedLinkInfo(a.getAttribute('data-saferedirecturl'));
+  if (!info) return;
+
+  const cardSenderEmail = a.closest('.adn')?.querySelector('.gD')?.getAttribute('email') || null;
+  if (!isSelfTrackedEntity(info.emailId, cardSenderEmail)) return;
+
+  // Unwrap link immediately in DOM so copy-link and navigation use the clean URL
+  a.setAttribute('href', info.targetUrl);
+  a.href = info.targetUrl;
+  if (a.hasAttribute('data-saferedirecturl')) {
+    a.removeAttribute('data-saferedirecturl');
+  }
+  a.dataset.plpUnwrapped = '1';
+
+  // Bypass any Gmail cached saferedirect listener on left/middle click
+  if ((e.type === 'click' || e.type === 'auxclick') && (e.button === 0 || e.button === 1)) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    window.open(info.targetUrl, '_blank', 'noopener,noreferrer');
+  }
+}
+
+document.addEventListener('click', handleSelfLinkGuard, true);
+document.addEventListener('auxclick', handleSelfLinkGuard, true);
+document.addEventListener('contextmenu', handleSelfLinkGuard, true);
+
 // Catch Ctrl+Enter / Cmd+Enter keyboard shortcuts AND focused Enter/Space
 document.addEventListener('keydown', (e) => {
   const isCtrlEnter = (e.ctrlKey || e.metaKey) && e.key === 'Enter';
@@ -1029,9 +1303,13 @@ const observer = new MutationObserver(() => {
   // 1. Compose windows (popouts and inline replies) need instant injection
   document.querySelectorAll('div[role="dialog"], .M9').forEach(injectComposeTool);
 
-  // 2. Refresh the UI instantly using current cache
+  // 2. Immediately scrub any self-tracking pixels or links rendered in viewed threads
+  scrubSelfTrackingInView();
+
+  // 3. Refresh the UI instantly using current cache
   clearTimeout(statsTimeout);
   statsTimeout = setTimeout(() => {
+    scrubSelfTrackingInView();
     injectSentBadges();
     injectEmailViewFeatures();
   }, 150); // fast UI refresh
@@ -1039,16 +1317,21 @@ const observer = new MutationObserver(() => {
 
 observer.observe(document.body, { childList: true, subtree: true });
 
+window.addEventListener('hashchange', () => {
+  scrubSelfTrackingInView();
+});
+
 // ------ Storage Listener (No Polling) ------
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
-    if (changes.session || changes.sessions) {
+    if (changes.session || changes.sessions || changes.browserSenders || changes.ownEmailMap) {
       updateKnownUserEmails();
     }
     const currentEmail = getActiveSenderEmail();
     if (changes.session || changes.sessions || (currentEmail && changes[`cached_emails_${currentEmail.toLowerCase()}`])) {
       statsError = null;
       fetchEmailStats().then(() => {
+        scrubSelfTrackingInView();
         injectSentBadges();
         injectEmailViewFeatures();
         document.querySelectorAll('div[role="dialog"], .M9').forEach(w => {
@@ -1111,6 +1394,7 @@ maintainKeepAlive();
 
 // Actually load the UI from local storage
 fetchEmailStats().then(() => {
+  scrubSelfTrackingInView();
   injectSentBadges();
   injectEmailViewFeatures();
 });

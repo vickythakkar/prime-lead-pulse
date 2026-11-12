@@ -4,8 +4,17 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "api/track/pixel/",
-      "resourceTypes": ["image", "xmlhttprequest", "other"]
+      "urlFilter": "||prime-lead-pulse-sigma.vercel.app/api/track/pixel/",
+      "resourceTypes": ["image", "xmlhttprequest", "other", "sub_frame"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||localhost:3000/api/track/pixel/",
+      "resourceTypes": ["image", "xmlhttprequest", "other", "sub_frame"]
     }
   }
 ]

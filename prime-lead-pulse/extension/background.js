@@ -1,5 +1,115 @@
-
 const DEFAULT_API_URL = 'https://prime-lead-pulse-sigma.vercel.app';
+
+const SENDER_DNR_RULE_IDS = [100, 101];
+
+async function getKnownBrowserSenders() {
+  const { browserSenders, session, sessions } = await chrome.storage.local.get(['browserSenders', 'session', 'sessions']);
+  const set = new Set();
+  if (Array.isArray(browserSenders)) {
+    browserSenders.forEach(s => {
+      if (typeof s === 'string' && s.includes('@') && s !== 'unknown') set.add(s.toLowerCase().trim());
+    });
+  }
+  if (session?.user?.email) set.add(session.user.email.toLowerCase().trim());
+  if (sessions) {
+    Object.keys(sessions).forEach(em => {
+      if (em && em.includes('@')) set.add(em.toLowerCase().trim());
+    });
+    Object.values(sessions).forEach(s => {
+      if (s?.user?.email) set.add(s.user.email.toLowerCase().trim());
+    });
+  }
+  return Array.from(set);
+}
+
+async function registerBrowserSender(email) {
+  if (!email || typeof email !== 'string') return;
+  const clean = email.toLowerCase().trim();
+  if (!clean.includes('@') || clean === 'unknown') return;
+
+  const { browserSenders } = await chrome.storage.local.get(['browserSenders']);
+  const set = new Set(Array.isArray(browserSenders) ? browserSenders.map(s => String(s).toLowerCase().trim()) : []);
+  if (!set.has(clean)) {
+    set.add(clean);
+    await chrome.storage.local.set({ browserSenders: Array.from(set) });
+  }
+  await syncSenderDnrRules();
+}
+
+async function syncSenderDnrRules() {
+  if (!chrome.declarativeNetRequest?.updateDynamicRules) return;
+  try {
+    const senders = await getKnownBrowserSenders();
+    const sendersCsv = senders.join(',');
+
+    if (!sendersCsv) {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: SENDER_DNR_RULE_IDS,
+        addRules: []
+      });
+      return;
+    }
+
+    const resourceTypes = ['main_frame', 'sub_frame', 'image', 'xmlhttprequest', 'other'];
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: SENDER_DNR_RULE_IDS,
+      addRules: [
+        {
+          id: 100,
+          priority: 2,
+          action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+              { header: 'x-plp-extension-senders', operation: 'set', value: sendersCsv }
+            ]
+          },
+          condition: {
+            urlFilter: '||prime-lead-pulse-sigma.vercel.app/api/track/',
+            resourceTypes
+          }
+        },
+        {
+          id: 101,
+          priority: 2,
+          action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+              { header: 'x-plp-extension-senders', operation: 'set', value: sendersCsv }
+            ]
+          },
+          condition: {
+            urlFilter: '||localhost:3000/api/track/',
+            resourceTypes
+          }
+        }
+      ]
+    });
+  } catch (err) {
+    console.warn('[PLP] Failed to sync sender DNR rules:', err);
+  }
+}
+
+async function saveOwnEmailMapFromApi(ownEmails) {
+  if (!Array.isArray(ownEmails) || ownEmails.length === 0) return;
+  const { ownEmailMap } = await chrome.storage.local.get(['ownEmailMap']);
+  const merged = Object.assign({}, ownEmailMap || {});
+  for (const row of ownEmails) {
+    if (row && row.id) {
+      merged[row.id] = (row.sender_email || '').toLowerCase().trim();
+    }
+  }
+  // Cap map size at 2500 entries to stay well within storage limits
+  const keys = Object.keys(merged);
+  if (keys.length > 2500) {
+    const trimmed = {};
+    for (const k of keys.slice(keys.length - 2500)) {
+      trimmed[k] = merged[k];
+    }
+    await chrome.storage.local.set({ ownEmailMap: trimmed });
+  } else {
+    await chrome.storage.local.set({ ownEmailMap: merged });
+  }
+}
 
 async function processRetryQueue() {
   const { retryQueue, apiUrl } = await chrome.storage.local.get(['retryQueue', 'apiUrl']);
@@ -7,6 +117,7 @@ async function processRetryQueue() {
   if (!retryQueue || retryQueue.length === 0) return;
   
   const base = activeApiUrl.replace(/\/$/, '');
+  const sendersCsv = (await getKnownBrowserSenders()).join(',');
   
   // Create a copy of the queue so we can mutate it
   let currentQueue = [...retryQueue];
@@ -16,15 +127,18 @@ async function processRetryQueue() {
     try {
       const session = await getSessionForSender(payload.sender_email);
       const headers = { 'Content-Type': 'application/json' };
+      if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
       if (session && session.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
       
       const res = session 
         ? await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
+            credentials: 'include',
             method: 'POST',
             headers,
             body: JSON.stringify(payload)
           }, session, apiUrl, payload.sender_email)
         : await fetch(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store",
+            credentials: 'include',
             method: 'POST',
             headers,
             body: JSON.stringify(payload)
@@ -79,9 +193,10 @@ async function fetchWithAuth(url, options, session, apiUrl, senderEmail) {
     if (!refreshTokenPromise) {
       refreshTokenPromise = (async () => {
         try {
-          const base = apiUrl.replace(/\/$/, '');
+          const base = (apiUrl || DEFAULT_API_URL).replace(/\/$/, '');
           const refreshRes = await fetch(`${base}/api/auth/refresh`, {
             method: 'POST',
+            credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ refresh_token: session.refresh_token })
           });
@@ -150,6 +265,14 @@ async function getSessionForSender(senderEmail) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'REGISTER_BROWSER_SENDER') {
+    (async () => {
+      await registerBrowserSender(request.email);
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
   if (request.action === 'DASHBOARD_LOGIN') {
     const plpEmail = request.session?.user?.email;
     const apiUrl = request.apiUrl || DEFAULT_API_URL;
@@ -158,12 +281,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const sessions = data.sessions || {};
         sessions[plpEmail.toLowerCase()] = request.session;
         chrome.storage.local.set({ sessions, apiUrl, session: request.session, lastPoll: 0 }, () => {
+          registerBrowserSender(plpEmail);
           connectRealtime();
           pollForNotifications();
         });
       });
     } else {
       chrome.storage.local.set({ session: request.session, apiUrl, lastPoll: 0 }, () => {
+        syncSenderDnrRules();
         connectRealtime();
         pollForNotifications();
       });
@@ -175,9 +300,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'DASHBOARD_LOGOUT') {
     // We do not clear ALL sessions in the multi-tenant map, 
     // but we SHOULD clear the fallback session so it stops using a dead token.
-    chrome.storage.local.remove('session');
-    sendResponse({ success: true });
-    return;
+    (async () => {
+      await chrome.storage.local.remove('session');
+      await syncSenderDnrRules();
+      const { sessions, apiUrl } = await chrome.storage.local.get(['sessions', 'apiUrl']);
+      if (!sessions || Object.keys(sessions).length === 0) {
+        const base = (apiUrl || DEFAULT_API_URL).replace(/\/$/, '');
+        try {
+          await fetch(`${base}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+        } catch (_) {}
+      }
+      sendResponse({ success: true });
+    })();
+    return true;
   }
 
   if (request.action === 'CREATE_EMAIL') {
@@ -187,21 +322,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const activeApiUrl = apiUrl || DEFAULT_API_URL;
         
         const senderEmail = request.payload.sender_email;
+        await registerBrowserSender(senderEmail);
+        const sendersCsv = (await getKnownBrowserSenders()).join(',');
         const session = await getSessionForSender(senderEmail);
 
         const base = activeApiUrl.replace(/\/$/, '');
         const headers = { 'Content-Type': 'application/json' };
+        if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
         if (session && session.access_token) {
           headers['Authorization'] = `Bearer ${session.access_token}`;
         }
 
         const res = session
           ? await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
+              credentials: 'include',
               method: 'POST',
               headers,
               body: JSON.stringify(request.payload)
             }, session, activeApiUrl, senderEmail)
           : await fetch(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store",
+              credentials: 'include',
               method: 'POST',
               headers,
               body: JSON.stringify(request.payload)
@@ -221,6 +361,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Immediately update local caches so the email is known right away
         if (data?.email) {
+          await saveOwnEmailMapFromApi([{ id: data.email.id, sender_email: data.email.sender_email }]);
           if (data.email.user_id) {
             subscribeToActiveUserChannels();
           }
@@ -270,36 +411,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       try {
         const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
         const senderEmail = request.senderEmail;
+        if (senderEmail) await registerBrowserSender(senderEmail);
+        const sendersCsv = (await getKnownBrowserSenders()).join(',');
         const session = await getSessionForSender(senderEmail);
         const parentEmail = session?.user?.email || senderEmail;
         
         // Prioritize active sender address first, then fallback to parent
-        const keysToGet = [];
+        const keysToGet = ['ownEmailMap'];
         if (senderEmail) keysToGet.push(`cached_emails_${senderEmail.toLowerCase()}`);
         if (parentEmail) keysToGet.push(`cached_emails_${parentEmail.toLowerCase()}`);
         
         const data = await chrome.storage.local.get(keysToGet);
         let cached = (senderEmail && data[`cached_emails_${senderEmail.toLowerCase()}`]) ||
                      (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
+        let ownEmailMap = data.ownEmailMap || {};
         
         // Always query server for fresh emails to ensure newly sent & replied emails are up-to-date
         const activeApiUrl = apiUrl || DEFAULT_API_URL;
         const base = activeApiUrl.replace(/\/$/, '');
         const queryUrl = senderEmail 
-          ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=100&t=${Date.now()}`
-          : `${base}/api/emails?limit=100&t=${Date.now()}`;
+          ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=100&include_own_ids=1&t=${Date.now()}`
+          : `${base}/api/emails?limit=100&include_own_ids=1&t=${Date.now()}`;
         
         const headers = {};
+        if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
         if (session && session.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
 
         try {
           const res = session 
-            ? await fetchWithAuth(queryUrl, { cache: "no-store", headers }, session, activeApiUrl, senderEmail)
-            : await fetch(queryUrl, { cache: "no-store", headers });
+            ? await fetchWithAuth(queryUrl, { cache: "no-store", credentials: 'include', headers }, session, activeApiUrl, senderEmail)
+            : await fetch(queryUrl, { cache: "no-store", credentials: 'include', headers });
 
           if (res.ok) {
             const resData = await res.json();
             const freshEmails = resData.emails || [];
+            if (Array.isArray(resData.ownEmails) && resData.ownEmails.length > 0) {
+              await saveOwnEmailMapFromApi(resData.ownEmails);
+              const { ownEmailMap: refreshedMap } = await chrome.storage.local.get(['ownEmailMap']);
+              ownEmailMap = refreshedMap || ownEmailMap;
+            }
             if (freshEmails.length > 0) {
               cached = freshEmails;
               const cacheUpdates = {};
@@ -312,7 +462,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           console.warn('GET_STATS network fetch failed, using cache:', fetchErr);
         }
 
-        sendResponse({ success: true, data: { emails: cached || [] } });
+        sendResponse({ success: true, data: { emails: cached || [], ownEmailMap } });
       } catch (err) {
         sendResponse({ success: false, error: err.message });
       }
@@ -742,16 +892,25 @@ async function pollForNotifications() {
     const base = activeApiUrl.replace(/\/$/, '');
     const currentKnownIds = new Set(knownEventIds || []);
     const newEventsToNotify = [];
+    const sendersCsv = (await getKnownBrowserSenders()).join(',');
 
     // Poll for each session
     for (const currentSession of activeSessions) {
-      const res = await fetchWithAuth(`${base}/api/emails?t=${Date.now()}`, { cache: "no-store", 
-        headers: { 'Authorization': `Bearer ${currentSession.access_token}` }
+      const headers = { 'Authorization': `Bearer ${currentSession.access_token}` };
+      if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
+
+      const res = await fetchWithAuth(`${base}/api/emails?include_own_ids=1&t=${Date.now()}`, { cache: "no-store", 
+        credentials: 'include',
+        headers
       }, currentSession, apiUrl, currentSession.user?.email);
       
       if (!res.ok) continue;
       
-      const { emails } = await res.json();
+      const resJson = await res.json();
+      const { emails, ownEmails } = resJson;
+      if (Array.isArray(ownEmails) && ownEmails.length > 0) {
+        await saveOwnEmailMapFromApi(ownEmails);
+      }
       
       // Save emails for content.js across both the account owner and all sending addresses
       const senders = new Set();
@@ -797,18 +956,22 @@ async function pollForNotifications() {
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local' && (changes.session || changes.sessions)) {
     subscribeToActiveUserChannels();
+    syncSenderDnrRules();
   }
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  syncSenderDnrRules();
   connectRealtime();
   pollForNotifications();
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+  syncSenderDnrRules();
   connectRealtime();
   pollForNotifications();
 });
 
 // Initial startup connection
+syncSenderDnrRules();
 connectRealtime();

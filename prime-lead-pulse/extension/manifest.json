@@ -39,6 +39,17 @@
                 "*://mail.google.com/*"
             ],
             "js": [
+                "scripts/pixel-blocker.js"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN",
+            "all_frames": true
+        },
+        {
+            "matches": [
+                "*://mail.google.com/*"
+            ],
+            "js": [
                 "scripts/content.js"
             ],
             "css": [

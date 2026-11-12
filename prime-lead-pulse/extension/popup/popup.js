@@ -106,6 +106,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (Object.keys(activeSessions).length === 0) {
       await chrome.storage.local.remove(['session', 'sessions', 'apiUrl', 'lastPoll']);
+      try {
+        await chrome.runtime.sendMessage({ action: 'DASHBOARD_LOGOUT' });
+      } catch (_) {}
     } else {
       await chrome.storage.local.set({ 
         sessions: activeSessions,
@@ -133,6 +136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const res = await fetch(`${apiUrl}/api/auth/login`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
@@ -163,6 +167,13 @@ document.addEventListener('DOMContentLoaded', async () => {
           apiUrl: apiUrl,
           lastPoll: 0 // Force poll to load the new emails
         });
+
+        try {
+          await chrome.runtime.sendMessage({
+            action: 'REGISTER_BROWSER_SENDER',
+            email: newSession.user.email
+          });
+        } catch (_) {}
         
         await refreshUI();
       } else {

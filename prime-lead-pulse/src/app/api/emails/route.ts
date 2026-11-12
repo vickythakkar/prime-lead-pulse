@@ -3,6 +3,7 @@ export const revalidate = 0;
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createMergedSenderCookieHeader } from '@/utils/senderCookie';
 
 // Helper to get an authenticated Supabase client using the token passed from the Chrome Extension
 function getAuthClient(request: Request) {
@@ -115,7 +116,18 @@ export async function POST(request: Request) {
 
     if (error) throw error;
 
-    return NextResponse.json({ success: true, email: data });
+    const res = NextResponse.json({ success: true, email: data });
+    try {
+      const cookieHeader = await createMergedSenderCookieHeader(request, {
+        uid: targetUserId,
+        email: user?.email || null,
+        extraSenders: [sender_email],
+      });
+      res.headers.set('Set-Cookie', cookieHeader);
+    } catch (cookieErr) {
+      console.warn('[POST /api/emails] Failed to set sender cookie:', cookieErr);
+    }
+    return res;
   } catch (error: any) {
     console.error('Error creating email record:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -135,6 +147,7 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const senderEmail = searchParams.get('sender_email');
+    const includeOwnIds = searchParams.get('include_own_ids') === '1';
     const limitParam = searchParams.get('limit');
     const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 50, 1), 200) : 50;
 
@@ -215,7 +228,35 @@ export async function GET(request: Request) {
       };
     });
 
-    return NextResponse.json({ success: true, emails: formattedData });
+    let ownEmails: { id: string; sender_email: string }[] | undefined;
+    if (includeOwnIds) {
+      const { data: idRows } = await adminSb
+        .from('emails')
+        .select('id, sender_email')
+        .eq('user_id', targetUserId)
+        .order('created_at', { ascending: false })
+        .limit(2000);
+      ownEmails = idRows || [];
+    }
+
+    const res = NextResponse.json({
+      success: true,
+      emails: formattedData,
+      ...(ownEmails ? { ownEmails } : {}),
+    });
+
+    try {
+      const cookieHeader = await createMergedSenderCookieHeader(request, {
+        uid: targetUserId,
+        email: user?.email || null,
+        extraSenders: senderEmail ? [senderEmail] : [],
+      });
+      res.headers.set('Set-Cookie', cookieHeader);
+    } catch (cookieErr) {
+      console.warn('[GET /api/emails] Failed to set sender cookie:', cookieErr);
+    }
+
+    return res;
   } catch (error: any) {
     console.error('Error fetching emails:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

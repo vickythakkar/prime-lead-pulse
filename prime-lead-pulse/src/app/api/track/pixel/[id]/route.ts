@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isRequestFromSender } from '@/utils/senderCookie';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -81,6 +82,11 @@ export async function GET(
     }
 
     if (emailData) {
+      // SENDER EXCLUSION: Never record an open when the sender themselves loads the pixel
+      if (await isRequestFromSender(request, emailData)) {
+        return new NextResponse(PIXEL_BUFFER, { status: 200, headers: PIXEL_HEADERS });
+      }
+
       // 3. DEBOUNCE: Prevent duplicate opens within 15 seconds
       const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
       const { data: recentOpens } = await supabase

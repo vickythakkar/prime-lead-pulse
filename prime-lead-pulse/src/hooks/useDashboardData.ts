@@ -134,6 +134,9 @@ export function useDashboardData() {
     if (typeof window !== 'undefined') {
       window.postMessage({ type: 'PLP_DASHBOARD_AUTH', action: 'LOGOUT' }, '*');
     }
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (_) {}
     await supabase.auth.signOut();
     router.push('/');
   };
