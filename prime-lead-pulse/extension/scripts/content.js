@@ -377,6 +377,11 @@ function isSelfTrackedEntity(emailId, cardSenderEmail) {
   return false;
 }
 
+function isPlpHostUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  return rawUrl.includes('prime-lead-pulse-sigma.vercel.app') || rawUrl.includes('localhost:3000');
+}
+
 function extractTrackedLinkInfo(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return null;
   try {
@@ -390,6 +395,10 @@ function extractTrackedLinkInfo(rawUrl) {
       }
     }
 
+    const isPlpHost =
+      urlObj.hostname === 'prime-lead-pulse-sigma.vercel.app' ||
+      urlObj.host === 'localhost:3000';
+
     const match = urlObj.pathname.match(/\/api\/track\/link\/([a-zA-Z0-9_-]+)/i);
     if (!match) return null;
 
@@ -398,7 +407,7 @@ function extractTrackedLinkInfo(rawUrl) {
       return null;
     }
 
-    return { emailId: match[1], targetUrl };
+    return { emailId: match[1], targetUrl, isPlpHost };
   } catch (_) {
     return null;
   }
@@ -418,20 +427,20 @@ function scrubSelfTrackingInView() {
     const card = node.closest('.adn');
     const cardSenderEmail = card ? card.querySelector('.gD')?.getAttribute('email') : null;
 
-    // 1. Neutralize self tracking pixels
+    // 1. Neutralize Prime Lead Pulse tracking pixels in viewed emails
     const imgs = node.querySelectorAll('img[src*="/api/track/pixel/"], img[data-surl*="/api/track/pixel/"]');
     imgs.forEach(img => {
       const src = img.getAttribute('src') || '';
       const surl = img.getAttribute('data-surl') || '';
       const emailId = extractPixelEmailId(src) || extractPixelEmailId(surl);
-      if (isSelfTrackedEntity(emailId, cardSenderEmail)) {
+      if (isPlpHostUrl(src) || isPlpHostUrl(surl) || isSelfTrackedEntity(emailId, cardSenderEmail)) {
         img.setAttribute('src', PLP_TRANSPARENT_GIF);
         if (surl) img.removeAttribute('data-surl');
         img.dataset.plpSelfBlocked = '1';
       }
     });
 
-    // 2. Unwrap self tracked links so clicking or copying never hits /api/track/link/
+    // 2. Unwrap Prime Lead Pulse tracked links so clicking or copying never hits /api/track/link/
     const links = node.querySelectorAll('a[href*="/api/track/link/"], a[data-saferedirecturl*="/api/track/link/"]');
     links.forEach(a => {
       const info =
@@ -439,7 +448,7 @@ function scrubSelfTrackingInView() {
         extractTrackedLinkInfo(a.getAttribute('data-saferedirecturl'));
       if (!info) return;
 
-      if (isSelfTrackedEntity(info.emailId, cardSenderEmail)) {
+      if (info.isPlpHost || isSelfTrackedEntity(info.emailId, cardSenderEmail)) {
         a.setAttribute('href', info.targetUrl);
         a.href = info.targetUrl;
         if (a.hasAttribute('data-saferedirecturl')) {
@@ -520,8 +529,9 @@ function findEmailForThread(subject, participantEmails, participantNames, sender
   });
 
   let candidates = recipMatches;
-  // If recipient extraction was ambiguous or multi-party thread in Inbox/Sent, fall back to subject matches
-  if (candidates.length === 0 && subjectMatches.length > 0) {
+  // Only fall back to subject match when there is a single unique email with that subject
+  // (prevents an opened email from bleeding onto other recipients who received the same subject)
+  if (candidates.length === 0 && subjectMatches.length === 1) {
     candidates = subjectMatches;
   }
 
@@ -1224,7 +1234,7 @@ function handleSelfLinkGuard(e) {
   if (!info) return;
 
   const cardSenderEmail = a.closest('.adn')?.querySelector('.gD')?.getAttribute('email') || null;
-  if (!isSelfTrackedEntity(info.emailId, cardSenderEmail)) return;
+  if (!info.isPlpHost && !isSelfTrackedEntity(info.emailId, cardSenderEmail)) return;
 
   // Unwrap link immediately in DOM so copy-link and navigation use the clean URL
   a.setAttribute('href', info.targetUrl);
@@ -1321,14 +1331,52 @@ window.addEventListener('hashchange', () => {
   scrubSelfTrackingInView();
 });
 
-// ------ Storage Listener (No Polling) ------
+// ------ Bridge: Forward extracted Google Image Proxy paths from MAIN-world pixel-blocker to background DNR ------
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'PLP_BLOCK_PROXY_PATHS' && Array.isArray(e.data.paths) && e.data.paths.length > 0) {
+    const validPaths = e.data.paths.filter(p => typeof p === 'string' && /^(?:meips|proxy)\/[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=-]{8,512}$/.test(p));
+    if (validPaths.length > 0) {
+      try {
+        chrome.runtime.sendMessage({ action: 'BLOCK_PROXY_PATHS', paths: validPaths }).catch?.(() => {});
+      } catch (_) {}
+    }
+  }
+});
+
+// Sync any persisted Google Image Proxy paths into session DNR rules on page load
+try {
+  const savedProxyPathsRaw = window.localStorage.getItem('__plp_blocked_proxy_paths');
+  if (savedProxyPathsRaw) {
+    const savedPaths = JSON.parse(savedProxyPathsRaw);
+    if (Array.isArray(savedPaths) && savedPaths.length > 0) {
+      chrome.runtime.sendMessage({ action: 'BLOCK_PROXY_PATHS', paths: savedPaths }).catch?.(() => {});
+    }
+  }
+} catch (_) {}
+
+function applyRawEmailsToCache(rawEmails) {
+  if (!Array.isArray(rawEmails)) return;
+  emailCache = rawEmails.map(email => {
+    const opens = (email.tracking_events || []).filter(e => e.event_type === 'open');
+    const clicks = (email.tracking_events || []).filter(e => e.event_type === 'click');
+    let status = 'Unopened';
+    if (clicks.length > 0) status = 'Clicked';
+    else if (opens.length > 0) status = 'Opened';
+    return { ...email, opens: opens.length, clicks: clicks.length, status, events: email.tracking_events || [] };
+  });
+  hasFetchedOnce = true;
+}
+
+// ------ Storage Listener (Reads Cache Directly — No Echo API Storm!) ------
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
     if (changes.session || changes.sessions || changes.browserSenders || changes.ownEmailMap) {
       updateKnownUserEmails();
     }
     const currentEmail = getActiveSenderEmail();
-    if (changes.session || changes.sessions || (currentEmail && changes[`cached_emails_${currentEmail.toLowerCase()}`])) {
+    const cacheKey = currentEmail ? `cached_emails_${currentEmail.toLowerCase()}` : null;
+
+    if (changes.session || changes.sessions) {
       statsError = null;
       fetchEmailStats().then(() => {
         scrubSelfTrackingInView();
@@ -1340,6 +1388,13 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
           injectComposeTool(w);
         });
       });
+    } else if (cacheKey && changes[cacheKey] && Array.isArray(changes[cacheKey].newValue)) {
+      // Directly apply background poll results from storage without firing another network request
+      statsError = null;
+      applyRawEmailsToCache(changes[cacheKey].newValue);
+      scrubSelfTrackingInView();
+      injectSentBadges();
+      injectEmailViewFeatures();
     }
   }
 });

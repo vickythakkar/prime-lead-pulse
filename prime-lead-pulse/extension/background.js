@@ -1,6 +1,51 @@
 const DEFAULT_API_URL = 'https://prime-lead-pulse-sigma.vercel.app';
+const SUPABASE_URL = 'https://rnvueftjthxxiliusvxi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJudnVlZnRqdGh4eGlsaXVzdnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA2OTkwMDUsImV4cCI6MjEwNjI3NTAwNX0.QzQ-jALg_AdEFkwIWb4S7bW6TP31RnfeB2SxOe65wik';
 
 const SENDER_DNR_RULE_IDS = [100, 101];
+const PROXY_BLOCK_BASE_RULE_ID = 200;
+const MAX_PROXY_BLOCK_RULES = 150;
+
+let blockedProxyPathsList = [];
+
+async function addBlockedProxyPathRules(newPaths) {
+  if (!Array.isArray(newPaths) || newPaths.length === 0) return;
+  if (!chrome.declarativeNetRequest?.updateSessionRules) return;
+
+  let changed = false;
+  for (const p of newPaths) {
+    if (typeof p === 'string' && p.length > 8 && !blockedProxyPathsList.includes(p)) {
+      blockedProxyPathsList.push(p);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+
+  if (blockedProxyPathsList.length > MAX_PROXY_BLOCK_RULES) {
+    blockedProxyPathsList = blockedProxyPathsList.slice(blockedProxyPathsList.length - MAX_PROXY_BLOCK_RULES);
+  }
+
+  try {
+    const existingRules = await chrome.declarativeNetRequest.getSessionRules();
+    const removeRuleIds = existingRules
+      .filter(r => r.id >= PROXY_BLOCK_BASE_RULE_ID && r.id < PROXY_BLOCK_BASE_RULE_ID + MAX_PROXY_BLOCK_RULES)
+      .map(r => r.id);
+
+    const addRules = blockedProxyPathsList.map((proxyPath, idx) => ({
+      id: PROXY_BLOCK_BASE_RULE_ID + idx,
+      priority: 3,
+      action: { type: 'block' },
+      condition: {
+        urlFilter: `||googleusercontent.com/${proxyPath}`,
+        resourceTypes: ['image', 'xmlhttprequest', 'other', 'sub_frame']
+      }
+    }));
+
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds, addRules });
+  } catch (err) {
+    console.warn('[PLP] Failed to update session proxy block rules:', err);
+  }
+}
 
 async function getKnownBrowserSenders() {
   const { browserSenders, session, sessions } = await chrome.storage.local.get(['browserSenders', 'session', 'sessions']);
@@ -89,26 +134,66 @@ async function syncSenderDnrRules() {
   }
 }
 
-async function saveOwnEmailMapFromApi(ownEmails) {
-  if (!Array.isArray(ownEmails) || ownEmails.length === 0) return;
-  const { ownEmailMap } = await chrome.storage.local.get(['ownEmailMap']);
-  const merged = Object.assign({}, ownEmailMap || {});
-  for (const row of ownEmails) {
-    if (row && row.id) {
-      merged[row.id] = (row.sender_email || '').toLowerCase().trim();
+// ============================================================
+// Direct Supabase PostgREST Query (ZERO Vercel CPU / Invocations!)
+// ============================================================
+async function fetchEmailsDirectFromSupabase(session, apiUrl, senderEmail, limit = 100) {
+  if (!session || !session.access_token) return null;
+
+  const restUrl = `${SUPABASE_URL}/rest/v1/emails?select=id,user_id,sender_email,recipient,subject,created_at,tracking_events(id,event_type,url,created_at)&order=created_at.desc&limit=${limit}`;
+  const res = await fetchWithAuth(restUrl, {
+    cache: 'no-store',
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${session.access_token}`,
+      'Accept': 'application/json'
     }
-  }
-  // Cap map size at 2500 entries to stay well within storage limits
-  const keys = Object.keys(merged);
-  if (keys.length > 2500) {
-    const trimmed = {};
-    for (const k of keys.slice(keys.length - 2500)) {
-      trimmed[k] = merged[k];
+  }, session, apiUrl, senderEmail);
+
+  if (!res.ok) return null;
+  const rows = await res.json();
+  if (!Array.isArray(rows)) return null;
+
+  return rows.map((email) => {
+    const events = Array.isArray(email.tracking_events) ? email.tracking_events : [];
+    const opens = events.filter((e) => e.event_type === 'open');
+    const clicks = events.filter((e) => e.event_type === 'click');
+    return {
+      ...email,
+      tracking_events: events,
+      stats: {
+        opens: opens.length,
+        clicks: clicks.length,
+        last_opened: opens.length > 0 ? opens[opens.length - 1].created_at : null,
+      }
+    };
+  });
+}
+
+// Sync the signed plp_sender_token cookie on Vercel at most once per 6 hours (negligible Vercel usage)
+async function maybeSyncVercelSenderCookie(session, apiUrl, senderEmail) {
+  try {
+    const { lastCookieSync } = await chrome.storage.local.get(['lastCookieSync']);
+    if (lastCookieSync && Date.now() - lastCookieSync < 6 * 60 * 60 * 1000) return;
+
+    const base = (apiUrl || DEFAULT_API_URL).replace(/\/$/, '');
+    const sendersCsv = (await getKnownBrowserSenders()).join(',');
+    const headers = {};
+    if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
+    if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
+    const url = senderEmail
+      ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=1&t=${Date.now()}`
+      : `${base}/api/emails?limit=1&t=${Date.now()}`;
+
+    const res = session
+      ? await fetchWithAuth(url, { cache: 'no-store', credentials: 'include', headers }, session, apiUrl, senderEmail)
+      : await fetch(url, { cache: 'no-store', credentials: 'include', headers });
+
+    if (res.ok) {
+      await chrome.storage.local.set({ lastCookieSync: Date.now() });
     }
-    await chrome.storage.local.set({ ownEmailMap: trimmed });
-  } else {
-    await chrome.storage.local.set({ ownEmailMap: merged });
-  }
+  } catch (_) {}
 }
 
 async function processRetryQueue() {
@@ -156,11 +241,10 @@ async function processRetryQueue() {
 }
 
 // ============================================================
-// Prime Lead Pulse — Background Service Worker (v3)
-// Fixes:
-//  - Mutex lock on pollForNotifications prevents race-condition notification spam
-//  - Reduced alarm frequency
-//  - Smarter notification deduplication
+// Prime Lead Pulse — Background Service Worker (v4)
+//  - Direct Supabase PostgREST polling (zero Vercel compute for polls)
+//  - Instant <1s Supabase Realtime WebSocket alerts
+//  - Session DNR rules blocking Gmail proxied self-pixels
 // ============================================================
 
 let isPolling = false; // Mutex lock to prevent concurrent polls
@@ -265,6 +349,14 @@ async function getSessionForSender(senderEmail) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'BLOCK_PROXY_PATHS') {
+    (async () => {
+      await addBlockedProxyPathRules(request.paths);
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
   if (request.action === 'REGISTER_BROWSER_SENDER') {
     (async () => {
       await registerBrowserSender(request.email);
@@ -280,14 +372,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       chrome.storage.local.get(['sessions'], (data) => {
         const sessions = data.sessions || {};
         sessions[plpEmail.toLowerCase()] = request.session;
-        chrome.storage.local.set({ sessions, apiUrl, session: request.session, lastPoll: 0 }, () => {
+        chrome.storage.local.set({ sessions, apiUrl, session: request.session, lastPoll: 0, lastCookieSync: 0 }, () => {
           registerBrowserSender(plpEmail);
           connectRealtime();
           pollForNotifications();
         });
       });
     } else {
-      chrome.storage.local.set({ session: request.session, apiUrl, lastPoll: 0 }, () => {
+      chrome.storage.local.set({ session: request.session, apiUrl, lastPoll: 0, lastCookieSync: 0 }, () => {
         syncSenderDnrRules();
         connectRealtime();
         pollForNotifications();
@@ -361,7 +453,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Immediately update local caches so the email is known right away
         if (data?.email) {
-          await saveOwnEmailMapFromApi([{ id: data.email.id, sender_email: data.email.sender_email }]);
+          await chrome.storage.local.set({ lastCookieSync: Date.now() });
           if (data.email.user_id) {
             subscribeToActiveUserChannels();
           }
@@ -409,60 +501,71 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'GET_STATS') {
     (async () => {
       try {
-        const { apiUrl } = await chrome.storage.local.get(['apiUrl']);
+        const { apiUrl, lastStatsFetch } = await chrome.storage.local.get(['apiUrl', 'lastStatsFetch']);
         const senderEmail = request.senderEmail;
         if (senderEmail) await registerBrowserSender(senderEmail);
-        const sendersCsv = (await getKnownBrowserSenders()).join(',');
         const session = await getSessionForSender(senderEmail);
         const parentEmail = session?.user?.email || senderEmail;
         
         // Prioritize active sender address first, then fallback to parent
-        const keysToGet = ['ownEmailMap'];
+        const keysToGet = [];
         if (senderEmail) keysToGet.push(`cached_emails_${senderEmail.toLowerCase()}`);
         if (parentEmail) keysToGet.push(`cached_emails_${parentEmail.toLowerCase()}`);
         
         const data = await chrome.storage.local.get(keysToGet);
         let cached = (senderEmail && data[`cached_emails_${senderEmail.toLowerCase()}`]) ||
                      (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
-        let ownEmailMap = data.ownEmailMap || {};
+
+        // If cache is already fresh (<20s) and non-empty, return immediately with zero network traffic
+        if (cached && cached.length > 0 && lastStatsFetch && Date.now() - lastStatsFetch < 20000) {
+          sendResponse({ success: true, data: { emails: cached } });
+          return;
+        }
         
-        // Always query server for fresh emails to ensure newly sent & replied emails are up-to-date
         const activeApiUrl = apiUrl || DEFAULT_API_URL;
-        const base = activeApiUrl.replace(/\/$/, '');
-        const queryUrl = senderEmail 
-          ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=100&include_own_ids=1&t=${Date.now()}`
-          : `${base}/api/emails?limit=100&include_own_ids=1&t=${Date.now()}`;
-        
-        const headers = {};
-        if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
-        if (session && session.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+        let freshEmails = null;
 
         try {
-          const res = session 
-            ? await fetchWithAuth(queryUrl, { cache: "no-store", credentials: 'include', headers }, session, activeApiUrl, senderEmail)
-            : await fetch(queryUrl, { cache: "no-store", credentials: 'include', headers });
+          // 1. Primary path: Direct Supabase PostgREST query (0 Vercel invocations / CPU!)
+          if (session && session.access_token) {
+            freshEmails = await fetchEmailsDirectFromSupabase(session, activeApiUrl, senderEmail, 100);
+            maybeSyncVercelSenderCookie(session, activeApiUrl, senderEmail);
+          }
 
-          if (res.ok) {
-            const resData = await res.json();
-            const freshEmails = resData.emails || [];
-            if (Array.isArray(resData.ownEmails) && resData.ownEmails.length > 0) {
-              await saveOwnEmailMapFromApi(resData.ownEmails);
-              const { ownEmailMap: refreshedMap } = await chrome.storage.local.get(['ownEmailMap']);
-              ownEmailMap = refreshedMap || ownEmailMap;
+          // 2. Fallback path ONLY if no valid Supabase session exists
+          if (!freshEmails) {
+            const base = activeApiUrl.replace(/\/$/, '');
+            const sendersCsv = (await getKnownBrowserSenders()).join(',');
+            const queryUrl = senderEmail 
+              ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=100&t=${Date.now()}`
+              : `${base}/api/emails?limit=100&t=${Date.now()}`;
+            
+            const headers = {};
+            if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
+            if (session && session.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+
+            const res = session 
+              ? await fetchWithAuth(queryUrl, { cache: "no-store", credentials: 'include', headers }, session, activeApiUrl, senderEmail)
+              : await fetch(queryUrl, { cache: "no-store", credentials: 'include', headers });
+
+            if (res.ok) {
+              const resData = await res.json();
+              freshEmails = resData.emails || [];
             }
-            if (freshEmails.length > 0) {
-              cached = freshEmails;
-              const cacheUpdates = {};
-              if (senderEmail) cacheUpdates[`cached_emails_${senderEmail.toLowerCase()}`] = freshEmails;
-              if (parentEmail) cacheUpdates[`cached_emails_${parentEmail.toLowerCase()}`] = freshEmails;
-              await chrome.storage.local.set(cacheUpdates);
-            }
+          }
+
+          if (Array.isArray(freshEmails) && freshEmails.length > 0) {
+            cached = freshEmails;
+            const cacheUpdates = { lastStatsFetch: Date.now() };
+            if (senderEmail) cacheUpdates[`cached_emails_${senderEmail.toLowerCase()}`] = freshEmails;
+            if (parentEmail) cacheUpdates[`cached_emails_${parentEmail.toLowerCase()}`] = freshEmails;
+            await chrome.storage.local.set(cacheUpdates);
           }
         } catch (fetchErr) {
           console.warn('GET_STATS network fetch failed, using cache:', fetchErr);
         }
 
-        sendResponse({ success: true, data: { emails: cached || [], ownEmailMap } });
+        sendResponse({ success: true, data: { emails: cached || [] } });
       } catch (err) {
         sendResponse({ success: false, error: err.message });
       }
@@ -487,7 +590,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
         }, session, activeApiUrl, senderEmail);
 
-                let data;
+        let data;
         const text = await res.text();
         try {
           data = JSON.parse(text);
@@ -642,8 +745,6 @@ async function triggerNotificationsForEvents(eventsWithEmail) {
 // ============================================================
 // Supabase Realtime WebSocket Client (Instant < 1s Alerts)
 // ============================================================
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJudnVlZnRqdGh4eGlsaXVzdnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA2OTkwMDUsImV4cCI6MjEwNjI3NTAwNX0.QzQ-jALg_AdEFkwIWb4S7bW6TP31RnfeB2SxOe65wik';
-
 let realtimeWs = null;
 let realtimeHeartbeatInterval = null;
 let realtimeReconnectTimeout = null;
@@ -820,9 +921,6 @@ async function handleIncomingRealtimeEvent(payload) {
       });
     });
   } catch (err) {}
-
-  // 5. Gently poll in the background to ensure entire mailbox stays 100% in sync
-  pollForNotifications();
 }
 
 // Keep service worker connected while user has Gmail open
@@ -839,15 +937,17 @@ chrome.idle.setDetectionInterval(600);
 // When user returns from idle/locked state, immediately trigger a fresh poll
 chrome.idle.onStateChanged.addListener((newState) => {
   if (newState === 'active') {
+    connectRealtime();
     pollForNotifications();
   }
 });
 
-// Poll every 30 seconds (0.5 minutes) while active
+// Poll Supabase directly every 30 seconds (0.5 minutes) while active — ZERO Vercel CPU!
 chrome.alarms.create("pollStats", { periodInMinutes: 0.5 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "pollStats") {
+    connectRealtime();
     pollForNotifications();
   }
 });
@@ -862,7 +962,7 @@ function checkIsUserIdle() {
 }
 
 async function pollForNotifications() {
-  // If user has been idle for >= 10 minutes or computer is locked, skip polling to save Vercel compute
+  // If user has been idle for >= 10 minutes or computer is locked, skip polling
   const isIdle = await checkIsUserIdle();
   if (isIdle) return;
 
@@ -879,46 +979,36 @@ async function pollForNotifications() {
     const { session, sessions, apiUrl, knownEventIds } = await chrome.storage.local.get(['session', 'sessions', 'apiUrl', 'knownEventIds']);
     const activeApiUrl = apiUrl || DEFAULT_API_URL;
 
-    // Build array of all active sessions
-    const activeSessions = [];
+    // Deduplicate active sessions by user ID so we never double-poll the same account
+    const uniqueSessionsMap = new Map();
     if (sessions) {
-      Object.values(sessions).forEach(s => activeSessions.push(s));
-    } else if (session) {
-      activeSessions.push(session);
+      Object.values(sessions).forEach(s => {
+        if (s?.user?.id) uniqueSessionsMap.set(s.user.id, s);
+      });
     }
-    
+    if (session?.user?.id && !uniqueSessionsMap.has(session.user.id)) {
+      uniqueSessionsMap.set(session.user.id, session);
+    }
+    const activeSessions = Array.from(uniqueSessionsMap.values());
     if (activeSessions.length === 0) return;
 
-    const base = activeApiUrl.replace(/\/$/, '');
     const currentKnownIds = new Set(knownEventIds || []);
     const newEventsToNotify = [];
-    const sendersCsv = (await getKnownBrowserSenders()).join(',');
 
-    // Poll for each session
+    // Poll Supabase PostgREST directly for each unique account (ZERO Vercel invocations!)
     for (const currentSession of activeSessions) {
-      const headers = { 'Authorization': `Bearer ${currentSession.access_token}` };
-      if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
+      const emails = await fetchEmailsDirectFromSupabase(currentSession, activeApiUrl, currentSession.user?.email, 50);
+      if (!emails) continue;
 
-      const res = await fetchWithAuth(`${base}/api/emails?include_own_ids=1&t=${Date.now()}`, { cache: "no-store", 
-        credentials: 'include',
-        headers
-      }, currentSession, apiUrl, currentSession.user?.email);
-      
-      if (!res.ok) continue;
-      
-      const resJson = await res.json();
-      const { emails, ownEmails } = resJson;
-      if (Array.isArray(ownEmails) && ownEmails.length > 0) {
-        await saveOwnEmailMapFromApi(ownEmails);
-      }
-      
+      maybeSyncVercelSenderCookie(currentSession, activeApiUrl, currentSession.user?.email);
+
       // Save emails for content.js across both the account owner and all sending addresses
       const senders = new Set();
       if (currentSession.user?.email) senders.add(currentSession.user.email.toLowerCase());
       emails.forEach(e => {
         if (e.sender_email) senders.add(e.sender_email.toLowerCase());
       });
-      const cacheUpdates = {};
+      const cacheUpdates = { lastStatsFetch: Date.now() };
       for (const s of senders) {
         cacheUpdates[`cached_emails_${s}`] = emails;
       }
