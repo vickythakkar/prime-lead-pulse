@@ -101,6 +101,11 @@
 
   function shouldBlockDomImageUrl(urlStr, el) {
     if (typeof urlStr !== 'string' || !urlStr) return false;
+    // IRONCLAD RULE: ONLY touch Google-proxied URLs (googleusercontent.com / ggpht.com).
+    // NEVER modify unproxied outgoing tracking pixels (e.g., when Gmail clones/serializes
+    // Compose HTML into a detached element during Send). Direct unproxied loads in Compose
+    // are already blocked at Chrome's network layer by rules.json without mutating HTML.
+    if (!urlStr.includes('googleusercontent.com') && !urlStr.includes('ggpht.com')) return false;
     if (isInsideCompose(el)) return false;
     if (PLP_PIXEL_URL_RE.test(urlStr)) {
       // Extract and remember proxy token if present
@@ -367,7 +372,7 @@
         enumerable: linkHrefDesc.enumerable,
         get: linkHrefDesc.get,
         set: function (value) {
-          if (typeof value === 'string' && (PLP_PIXEL_URL_RE.test(value) || matchesBlockedProxyPath(value))) {
+          if (typeof value === 'string' && (value.includes('googleusercontent.com') || value.includes('ggpht.com')) && (PLP_PIXEL_URL_RE.test(value) || matchesBlockedProxyPath(value))) {
             return origLinkHrefSet.call(this, TRANSPARENT_GIF);
           }
           return origLinkHrefSet.call(this, value);
@@ -387,7 +392,7 @@
             return origSetAttribute.call(this, name, TRANSPARENT_GIF);
           }
         } else if (this.tagName === 'LINK' && lname === 'href') {
-          if (PLP_PIXEL_URL_RE.test(value) || matchesBlockedProxyPath(value)) {
+          if ((value.includes('googleusercontent.com') || value.includes('ggpht.com')) && (PLP_PIXEL_URL_RE.test(value) || matchesBlockedProxyPath(value))) {
             return origSetAttribute.call(this, name, TRANSPARENT_GIF);
           }
         }

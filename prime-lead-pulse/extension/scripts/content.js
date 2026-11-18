@@ -427,11 +427,16 @@ function scrubSelfTrackingInView() {
     const card = node.closest('.adn');
     const cardSenderEmail = card ? card.querySelector('.gD')?.getAttribute('email') : null;
 
-    // 1. Neutralize Prime Lead Pulse tracking pixels in viewed emails
+    // 1. Neutralize Google-proxied Prime Lead Pulse tracking pixels in viewed emails
+    //    (Never touch unproxied outgoing pixels — rules.json handles blocking Compose fetches)
     const imgs = node.querySelectorAll('img[src*="/api/track/pixel/"], img[data-surl*="/api/track/pixel/"]');
     imgs.forEach(img => {
       const src = img.getAttribute('src') || '';
       const surl = img.getAttribute('data-surl') || '';
+      const isProxied =
+        src.includes('googleusercontent.com') || src.includes('ggpht.com') ||
+        surl.includes('googleusercontent.com') || surl.includes('ggpht.com');
+      if (!isProxied) return;
       const emailId = extractPixelEmailId(src) || extractPixelEmailId(surl);
       if (isPlpHostUrl(src) || isPlpHostUrl(surl) || isSelfTrackedEntity(emailId, cardSenderEmail)) {
         img.setAttribute('src', PLP_TRANSPARENT_GIF);
@@ -529,10 +534,15 @@ function findEmailForThread(subject, participantEmails, participantNames, sender
   });
 
   let candidates = recipMatches;
-  // Only fall back to subject match when there is a single unique email with that subject
-  // (prevents an opened email from bleeding onto other recipients who received the same subject)
-  if (candidates.length === 0 && subjectMatches.length === 1) {
-    candidates = subjectMatches;
+  // Fall back to subject matches when recipient extraction was ambiguous (e.g., display names in Sent list),
+  // unless we have explicit participant emails that contradict multiple different recipients with the same subject.
+  if (candidates.length === 0 && subjectMatches.length > 0) {
+    const uniqueRecipients = new Set(
+      subjectMatches.map(e => (e.recipient || '').toLowerCase().trim()).filter(Boolean)
+    );
+    if (uniqueRecipients.size <= 1 || participantEmails.length === 0) {
+      candidates = subjectMatches;
+    }
   }
 
   if (candidates.length === 0) return null;

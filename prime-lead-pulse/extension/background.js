@@ -528,12 +528,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         try {
           // 1. Primary path: Direct Supabase PostgREST query (0 Vercel invocations / CPU!)
           if (session && session.access_token) {
-            freshEmails = await fetchEmailsDirectFromSupabase(session, activeApiUrl, senderEmail, 100);
+            freshEmails = await fetchEmailsDirectFromSupabase(session, activeApiUrl, senderEmail, 150);
             maybeSyncVercelSenderCookie(session, activeApiUrl, senderEmail);
           }
 
-          // 2. Fallback path ONLY if no valid Supabase session exists
-          if (!freshEmails) {
+          // 2. Fallback path ONLY if no valid Supabase session exists or direct query returned empty
+          if (!freshEmails || freshEmails.length === 0) {
             const base = activeApiUrl.replace(/\/$/, '');
             const sendersCsv = (await getKnownBrowserSenders()).join(',');
             const queryUrl = senderEmail 
@@ -997,7 +997,7 @@ async function pollForNotifications() {
 
     // Poll Supabase PostgREST directly for each unique account (ZERO Vercel invocations!)
     for (const currentSession of activeSessions) {
-      const emails = await fetchEmailsDirectFromSupabase(currentSession, activeApiUrl, currentSession.user?.email, 50);
+      const emails = await fetchEmailsDirectFromSupabase(currentSession, activeApiUrl, currentSession.user?.email, 150);
       if (!emails) continue;
 
       maybeSyncVercelSenderCookie(currentSession, activeApiUrl, currentSession.user?.email);
