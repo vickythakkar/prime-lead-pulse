@@ -501,8 +501,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'GET_STATS') {
     (async () => {
       try {
-        const { apiUrl, lastStatsFetch } = await chrome.storage.local.get(['apiUrl', 'lastStatsFetch']);
         const senderEmail = request.senderEmail;
+        const senderKey = (senderEmail || 'default').toLowerCase();
+        const fetchTsKey = `lastStatsFetch_${senderKey}`;
+        const { apiUrl, [fetchTsKey]: lastStatsFetch } = await chrome.storage.local.get(['apiUrl', fetchTsKey]);
         if (senderEmail) await registerBrowserSender(senderEmail);
         const session = await getSessionForSender(senderEmail);
         const parentEmail = session?.user?.email || senderEmail;
@@ -516,7 +518,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         let cached = (senderEmail && data[`cached_emails_${senderEmail.toLowerCase()}`]) ||
                      (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
 
-        // If cache is already fresh (<20s) and non-empty, return immediately with zero network traffic
+        // If cache for THIS sender is already fresh (<20s) and non-empty, return immediately with zero network traffic
         if (cached && cached.length > 0 && lastStatsFetch && Date.now() - lastStatsFetch < 20000) {
           sendResponse({ success: true, data: { emails: cached } });
           return;
@@ -537,8 +539,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const base = activeApiUrl.replace(/\/$/, '');
             const sendersCsv = (await getKnownBrowserSenders()).join(',');
             const queryUrl = senderEmail 
-              ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=100&t=${Date.now()}`
-              : `${base}/api/emails?limit=100&t=${Date.now()}`;
+              ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=150&t=${Date.now()}`
+              : `${base}/api/emails?limit=150&t=${Date.now()}`;
             
             const headers = {};
             if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
@@ -556,7 +558,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
           if (Array.isArray(freshEmails) && freshEmails.length > 0) {
             cached = freshEmails;
-            const cacheUpdates = { lastStatsFetch: Date.now() };
+            const cacheUpdates = { [fetchTsKey]: Date.now() };
             if (senderEmail) cacheUpdates[`cached_emails_${senderEmail.toLowerCase()}`] = freshEmails;
             if (parentEmail) cacheUpdates[`cached_emails_${parentEmail.toLowerCase()}`] = freshEmails;
             await chrome.storage.local.set(cacheUpdates);
@@ -996,23 +998,26 @@ async function pollForNotifications() {
     const newEventsToNotify = [];
 
     // Poll Supabase PostgREST directly for each unique account (ZERO Vercel invocations!)
+    const emailsBySenderKey = new Map();
     for (const currentSession of activeSessions) {
       const emails = await fetchEmailsDirectFromSupabase(currentSession, activeApiUrl, currentSession.user?.email, 150);
       if (!emails) continue;
 
       maybeSyncVercelSenderCookie(currentSession, activeApiUrl, currentSession.user?.email);
 
-      // Save emails for content.js across both the account owner and all sending addresses
+      // Merge emails per sender address so multiple logged-in accounts never overwrite each other's caches
       const senders = new Set();
       if (currentSession.user?.email) senders.add(currentSession.user.email.toLowerCase());
       emails.forEach(e => {
         if (e.sender_email) senders.add(e.sender_email.toLowerCase());
       });
-      const cacheUpdates = { lastStatsFetch: Date.now() };
       for (const s of senders) {
-        cacheUpdates[`cached_emails_${s}`] = emails;
+        const map = emailsBySenderKey.get(s) || new Map();
+        for (const e of emails) {
+          if (e && e.id) map.set(e.id, e);
+        }
+        emailsBySenderKey.set(s, map);
       }
-      await chrome.storage.local.set(cacheUpdates);
 
       for (const email of emails) {
         if (!email.tracking_events) continue;
@@ -1025,6 +1030,19 @@ async function pollForNotifications() {
           }
         }
       }
+    }
+
+    if (emailsBySenderKey.size > 0) {
+      const cacheUpdates = {};
+      const now = Date.now();
+      for (const [s, idMap] of emailsBySenderKey.entries()) {
+        const mergedList = Array.from(idMap.values()).sort(
+          (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+        );
+        cacheUpdates[`cached_emails_${s}`] = mergedList;
+        cacheUpdates[`lastStatsFetch_${s}`] = now;
+      }
+      await chrome.storage.local.set(cacheUpdates);
     }
 
     const MAX_EVENTS = 1000;
