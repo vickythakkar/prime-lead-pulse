@@ -554,6 +554,27 @@ function findEmailForThread(subject, participantEmails, participantNames, sender
     return dateB - dateA;
   });
 
+  // If multiple messages in the same thread matched (e.g., replies), aggregate thread activity
+  // so opening any message in the thread updates the thread pill immediately.
+  if (candidates.length > 1) {
+    const primary = candidates[0];
+    const eventMap = new Map();
+    for (const c of candidates) {
+      for (const ev of (c.events || c.tracking_events || [])) {
+        if (ev && ev.id && !eventMap.has(ev.id)) {
+          eventMap.set(ev.id, ev);
+        }
+      }
+    }
+    const mergedEvents = Array.from(eventMap.values());
+    const opensCount = mergedEvents.filter(e => e.event_type === 'open').length;
+    const clicksCount = mergedEvents.filter(e => e.event_type === 'click').length;
+    let status = 'Unopened';
+    if (clicksCount > 0) status = 'Clicked';
+    else if (opensCount > 0) status = 'Opened';
+    return { ...primary, opens: opensCount, clicks: clicksCount, status, events: mergedEvents, tracking_events: mergedEvents };
+  }
+
   return candidates[0];
 }
 
@@ -617,14 +638,14 @@ function findEmail(subject, recipientEmailOrArray) {
 // ------ API Calls via background ------
 let statsError = null;
 
-async function fetchEmailStats() {
+async function fetchEmailStats(forceRefresh = false) {
   let senderEmail = getActiveSenderEmail();
   if (senderEmail) senderEmail = senderEmail.toLowerCase();
   if (senderEmail && senderEmail !== 'unknown') {
     registerBrowserSender(senderEmail);
   }
   return new Promise(resolve => {
-    chrome.runtime.sendMessage({ action: 'GET_STATS', senderEmail }, response => {
+    chrome.runtime.sendMessage({ action: 'GET_STATS', senderEmail, forceRefresh }, response => {
       if (response && response.success) {
         statsError = null;
         if (response.data.ownEmailMap && typeof response.data.ownEmailMap === 'object') {
@@ -885,11 +906,10 @@ function injectEmailViewFeatures() {
     removePanel();
   }
 
-  // Inject "View Activity (N)" button in thread view
+  // Inject or refresh "View Activity (N)" button in thread view
   const selfEmails = getAllSelfEmails();
   const dateRows = document.querySelectorAll('.g3');
   dateRows.forEach(dateEl => {
-    if (dateEl.dataset.plpBtn) return;
     if (!record) return;
 
     const emailCard = dateEl.closest('.adn');
@@ -902,16 +922,19 @@ function injectEmailViewFeatures() {
     }
 
     const total = record.opens + record.clicks;
-    const btn = document.createElement('button');
-    btn.className = 'plp-view-btn';
+    let btn = dateEl.parentElement?.querySelector('.plp-view-btn');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.className = 'plp-view-btn';
+      dateEl.parentElement.insertBefore(btn, dateEl.nextSibling);
+      dateEl.dataset.plpBtn = 'true';
+    }
     btn.textContent = `View Activity (${total})`;
     btn.onclick = (e) => {
       e.stopPropagation();
       const to = document.querySelector('.gD')?.getAttribute('email') || '';
       showPanel(record, subject, to, '');
     };
-    dateEl.parentElement.insertBefore(btn, dateEl.nextSibling);
-    dateEl.dataset.plpBtn = 'true';
   });
 }
 
@@ -1366,14 +1389,31 @@ try {
 
 function applyRawEmailsToCache(rawEmails) {
   if (!Array.isArray(rawEmails)) return;
-  emailCache = rawEmails.map(email => {
-    const opens = (email.tracking_events || []).filter(e => e.event_type === 'open');
-    const clicks = (email.tracking_events || []).filter(e => e.event_type === 'click');
+  const byId = new Map();
+  // Keep existing in-memory events so a slower poll never regresses a newer Realtime event
+  for (const existing of emailCache) {
+    if (existing && existing.id) byId.set(existing.id, existing);
+  }
+  const nextCache = rawEmails.map(email => {
+    const prev = byId.get(email.id);
+    const eventMap = new Map();
+    for (const ev of (email.tracking_events || [])) {
+      if (ev && ev.id) eventMap.set(ev.id, ev);
+    }
+    if (prev) {
+      for (const ev of (prev.tracking_events || prev.events || [])) {
+        if (ev && ev.id && !eventMap.has(ev.id)) eventMap.set(ev.id, ev);
+      }
+    }
+    const mergedEvents = Array.from(eventMap.values());
+    const opens = mergedEvents.filter(e => e.event_type === 'open');
+    const clicks = mergedEvents.filter(e => e.event_type === 'click');
     let status = 'Unopened';
     if (clicks.length > 0) status = 'Clicked';
     else if (opens.length > 0) status = 'Opened';
-    return { ...email, opens: opens.length, clicks: clicks.length, status, events: email.tracking_events || [] };
+    return { ...email, opens: opens.length, clicks: clicks.length, status, events: mergedEvents, tracking_events: mergedEvents };
   });
+  emailCache = nextCache;
   hasFetchedOnce = true;
 }
 
@@ -1383,12 +1423,10 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     if (changes.session || changes.sessions || changes.browserSenders || changes.ownEmailMap) {
       updateKnownUserEmails();
     }
-    const currentEmail = getActiveSenderEmail();
-    const cacheKey = currentEmail ? `cached_emails_${currentEmail.toLowerCase()}` : null;
 
     if (changes.session || changes.sessions) {
       statsError = null;
-      fetchEmailStats().then(() => {
+      fetchEmailStats(true).then(() => {
         scrubSelfTrackingInView();
         injectSentBadges();
         injectEmailViewFeatures();
@@ -1398,10 +1436,25 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
           injectComposeTool(w);
         });
       });
-    } else if (cacheKey && changes[cacheKey] && Array.isArray(changes[cacheKey].newValue)) {
-      // Directly apply background poll results from storage without firing another network request
+      return;
+    }
+
+    // Match ANY updated cached_emails_* belonging to this browser's active Gmail or logged-in account
+    const selfEmails = getAllSelfEmails();
+    let updatedRawList = null;
+    for (const [key, change] of Object.entries(changes)) {
+      if (key.startsWith('cached_emails_') && Array.isArray(change.newValue)) {
+        const keyEmail = key.slice('cached_emails_'.length).toLowerCase();
+        if (selfEmails.size === 0 || selfEmails.has(keyEmail)) {
+          updatedRawList = change.newValue;
+          break;
+        }
+      }
+    }
+
+    if (updatedRawList) {
       statsError = null;
-      applyRawEmailsToCache(changes[cacheKey].newValue);
+      applyRawEmailsToCache(updatedRawList);
       scrubSelfTrackingInView();
       injectSentBadges();
       injectEmailViewFeatures();
@@ -1413,21 +1466,45 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 chrome.runtime.onMessage.addListener((request) => {
   if (request.action === 'REALTIME_EVENT' && request.payload) {
     const p = request.payload;
-    const target = emailCache.find(e => e.id === p.email_id);
+    const eventObj = {
+      id: p.id,
+      event_type: p.event_type,
+      url: p.url || null,
+      created_at: p.created_at || new Date().toISOString()
+    };
+    let target = emailCache.find(e => e.id === p.email_id);
     if (target) {
-      target.tracking_events = target.tracking_events || [];
+      target.tracking_events = Array.isArray(target.tracking_events) ? target.tracking_events : [];
       if (!target.tracking_events.some(ev => ev.id === p.id)) {
-        target.tracking_events.unshift(p);
-        if (p.event_type === 'open') target.opens = (target.opens || 0) + 1;
-        if (p.event_type === 'click') target.clicks = (target.clicks || 0) + 1;
+        target.tracking_events.unshift(eventObj);
+        target.events = [...target.tracking_events];
+        target.opens = target.tracking_events.filter(ev => ev.event_type === 'open').length;
+        target.clicks = target.tracking_events.filter(ev => ev.event_type === 'click').length;
         if (target.clicks > 0) target.status = 'Clicked';
         else if (target.opens > 0) target.status = 'Opened';
       }
+      hasFetchedOnce = true;
       injectSentBadges();
       injectEmailViewFeatures();
     } else {
-      // If not currently in local memory, re-fetch fresh stats
-      fetchEmailStats().then(() => {
+      // Insert immediately so the Gmail pill flips in <1s even before background re-fetch finishes
+      const newRec = {
+        id: p.email_id,
+        subject: p.subject || 'No Subject',
+        recipient: p.recipient || '',
+        sender_email: p.sender_email || '',
+        created_at: p.created_at || new Date().toISOString(),
+        opens: p.event_type === 'open' ? 1 : 0,
+        clicks: p.event_type === 'click' ? 1 : 0,
+        status: p.event_type === 'click' ? 'Clicked' : 'Opened',
+        events: [eventObj],
+        tracking_events: [eventObj]
+      };
+      emailCache.unshift(newRec);
+      hasFetchedOnce = true;
+      injectSentBadges();
+      injectEmailViewFeatures();
+      fetchEmailStats(true).then(() => {
         injectSentBadges();
         injectEmailViewFeatures();
       });

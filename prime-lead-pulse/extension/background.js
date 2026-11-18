@@ -519,7 +519,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                      (parentEmail && data[`cached_emails_${parentEmail.toLowerCase()}`]);
 
         // If cache for THIS sender is already fresh (<20s) and non-empty, return immediately with zero network traffic
-        if (cached && cached.length > 0 && lastStatsFetch && Date.now() - lastStatsFetch < 20000) {
+        // (unless forceRefresh is requested, e.g., after a Realtime open/click event)
+        if (!request.forceRefresh && cached && cached.length > 0 && lastStatsFetch && Date.now() - lastStatsFetch < 20000) {
           sendResponse({ success: true, data: { emails: cached } });
           return;
         }
@@ -884,23 +885,27 @@ async function handleIncomingRealtimeEvent(payload) {
   };
   triggerNotificationsForEvents([{ ev: payload, email: syntheticEmail }]);
 
-  // 3. Immediately update across ALL cached_emails_* lists in storage
+  // 3. Immediately update across ALL cached_emails_* lists in storage (and insert if missing)
   const allStorage = await chrome.storage.local.get(null);
   const updates = {};
+  const newEventObj = {
+    id: payload.id,
+    event_type: payload.event_type,
+    url: payload.url || null,
+    created_at: payload.created_at || new Date().toISOString()
+  };
+
+  let matchedAnyList = false;
   for (const [k, list] of Object.entries(allStorage)) {
     if (k.startsWith('cached_emails_') && Array.isArray(list)) {
       const idx = list.findIndex(e => e.id === payload.email_id);
       if (idx !== -1) {
+        matchedAnyList = true;
         const updatedList = [...list];
         const email = { ...updatedList[idx] };
-        email.tracking_events = email.tracking_events || [];
+        email.tracking_events = Array.isArray(email.tracking_events) ? [...email.tracking_events] : [];
         if (!email.tracking_events.some(e => e.id === payload.id)) {
-          email.tracking_events.unshift({
-            id: payload.id,
-            event_type: payload.event_type,
-            url: payload.url,
-            created_at: payload.created_at
-          });
+          email.tracking_events.unshift(newEventObj);
           if (payload.event_type === 'open') email.opens = (email.opens || 0) + 1;
           if (payload.event_type === 'click') email.clicks = (email.clicks || 0) + 1;
           updatedList[idx] = email;
@@ -909,13 +914,38 @@ async function handleIncomingRealtimeEvent(payload) {
       }
     }
   }
+
+  // If the email wasn't in cached_emails_<sender_email> yet, prepend it so Gmail pills update immediately
+  if (!matchedAnyList && payload.sender_email) {
+    const senderKey = `cached_emails_${payload.sender_email.toLowerCase().trim()}`;
+    const existingList = Array.isArray(allStorage[senderKey]) ? [...allStorage[senderKey]] : [];
+    existingList.unshift({
+      id: payload.email_id,
+      subject: payload.subject || 'No Subject',
+      recipient: payload.recipient || '',
+      sender_email: payload.sender_email,
+      created_at: payload.created_at || new Date().toISOString(),
+      opens: payload.event_type === 'open' ? 1 : 0,
+      clicks: payload.event_type === 'click' ? 1 : 0,
+      tracking_events: [newEventObj]
+    });
+    updates[senderKey] = existingList;
+  }
+
+  // Invalidate per-sender fetch throttle so any tab calling GET_STATS gets fresh data
+  for (const k of Object.keys(allStorage)) {
+    if (k.startsWith('lastStatsFetch_')) {
+      updates[k] = 0;
+    }
+  }
+
   if (Object.keys(updates).length > 0) {
     await chrome.storage.local.set(updates);
   }
 
   // 4. Directly notify all open Gmail tabs so the DOM badge flips in real-time
   try {
-    chrome.tabs.query({}, (tabs) => {
+    chrome.tabs.query({ url: '*://mail.google.com/*' }, (tabs) => {
       (tabs || []).forEach(t => {
         if (t.id) {
           chrome.tabs.sendMessage(t.id, { action: 'REALTIME_EVENT', payload }).catch(() => {});
