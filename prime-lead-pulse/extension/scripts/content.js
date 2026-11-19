@@ -165,6 +165,7 @@ if (!document.getElementById(PRIME_STYLE_ID)) {
 // ------ State ------
 let emailCache = []; // [{id, subject, recipient, sender_email, opens, clicks, status, events}]
 let ownEmailMap = {}; // { [emailId]: sender_email }
+let knownContactNames = {}; // { [cleanEmail]: "First Last" }
 let panelEmailId = null;
 let hasFetchedOnce = false; // Prevents premature "Untracked" badges before first data load
 let knownUserEmails = new Set();
@@ -260,7 +261,7 @@ function registerBrowserSender(email) {
 
 function updateKnownUserEmails() {
   loadPersistedSelfSendersIntoSet();
-  chrome.storage.local.get(['session', 'sessions', 'browserSenders', 'ownEmailMap'], data => {
+  chrome.storage.local.get(['session', 'sessions', 'browserSenders', 'ownEmailMap', 'contactNames'], data => {
     if (data.session?.user?.email) knownUserEmails.add(data.session.user.email.toLowerCase());
     if (data.sessions) {
       Object.keys(data.sessions).forEach(em => knownUserEmails.add(em.toLowerCase()));
@@ -275,6 +276,9 @@ function updateKnownUserEmails() {
     }
     if (data.ownEmailMap && typeof data.ownEmailMap === 'object') {
       Object.assign(ownEmailMap, data.ownEmailMap);
+    }
+    if (data.contactNames && typeof data.contactNames === 'object') {
+      Object.assign(knownContactNames, data.contactNames);
     }
     syncSelfStateToPage();
   });
@@ -465,18 +469,33 @@ function scrubSelfTrackingInView() {
   });
 }
 
-function recipientMatchesThread(eRecipient, participantEmails, participantNames, senderText) {
+function recipientMatchesThread(eRecipient, recipientEmails, participantNames, senderText) {
   if (!eRecipient) return false;
   const cleanDbRecip = eRecipient.toLowerCase();
 
-  // 1. Direct email match
-  for (const pEmail of participantEmails) {
+  // 1. Direct email match against non-sender participants
+  for (const pEmail of recipientEmails) {
     if (pEmail && (cleanDbRecip.includes(pEmail) || pEmail.includes(cleanDbRecip))) {
       return true;
     }
   }
 
-  // 2. Direct name match (ignore 'me', only names >= 3 chars)
+  // 2. Stored contact names dictionary lookup (e.g. dlewis@diyflatfee.com -> Darrell Lewis)
+  const contactName = (knownContactNames[cleanDbRecip] || '').toLowerCase();
+  if (contactName) {
+    for (const pName of participantNames) {
+      if (pName && pName !== 'me' && pName.length >= 3) {
+        if (contactName.includes(pName) || pName.includes(contactName)) return true;
+      }
+    }
+    if (senderText && (contactName.includes(senderText) || senderText.includes(contactName))) return true;
+    const contactParts = contactName.split(/[^a-z0-9]+/i).filter(p => p.length >= 3);
+    for (const cp of contactParts) {
+      if (senderText.includes(cp)) return true;
+    }
+  }
+
+  // 3. Direct name match (e.g. if eRecipient is "Darrell Lewis <dlewis@...>")
   for (const pName of participantNames) {
     if (pName && pName !== 'me' && pName.length >= 3) {
       if (cleanDbRecip.includes(pName) || pName.includes(cleanDbRecip)) {
@@ -485,13 +504,23 @@ function recipientMatchesThread(eRecipient, participantEmails, participantNames,
     }
   }
 
-  // 3. Sender text match
-  // Extract tokens from dbRecip, e.g. "John Doe <john@gmail.com>" -> "john", "doe"
-  const tokens = cleanDbRecip.replace(/<[^>]+>/g, '').split(/[^a-z0-9]+/i).filter(t => t.length >= 3 && t !== 'com' && t !== 'gmail' && t !== 'yahoo' && t !== 'outlook');
+  // 4. Token & username matching:
+  // e.g. "dlewis@diyflatfee.com" -> tokens "dlewis", "diyflatfee"
+  // Username "dlewis": first initial 'd' + last name 'lewis'
+  const cleanUsername = cleanDbRecip.split('@')[0] || '';
+  const tokens = cleanDbRecip.replace(/<[^>]+>/g, '').split(/[^a-z0-9]+/i)
+    .filter(t => t.length >= 3 && t !== 'com' && t !== 'gmail' && t !== 'yahoo' && t !== 'outlook' && t !== 'hotmail');
+
   for (const tok of tokens) {
-    if (senderText.includes(tok)) {
-      return true;
+    if (senderText && senderText.includes(tok)) return true;
+    for (const pName of participantNames) {
+      if (pName && (pName.includes(tok) || tok.includes(pName))) return true;
     }
+  }
+
+  // Substring match on username: e.g. participant name is "lewis" and username is "dlewis"
+  for (const pName of participantNames) {
+    if (pName && pName.length >= 4 && cleanUsername.includes(pName)) return true;
   }
 
   return false;
@@ -517,32 +546,56 @@ function findEmailForThread(subject, participantEmails, participantNames, sender
   }
 
   // Fallback for truncated titles (Gmail often truncates long subjects in list view)
-  if (subjectMatches.length === 0 && uiSubj.length >= 12) {
+  if (subjectMatches.length === 0 && uiSubj.length >= 10) {
     for (const e of emailCache) {
       const dbSubj = strip(e.subject);
-      if (dbSubj.length >= 12 && (uiSubj.startsWith(dbSubj) || dbSubj.startsWith(uiSubj))) {
+      if (dbSubj.length >= 10 && (uiSubj.startsWith(dbSubj) || dbSubj.startsWith(uiSubj))) {
         subjectMatches.push(e);
       }
     }
   }
 
+  // If this subject was never tracked in PLP, it is truly Untracked
   if (subjectMatches.length === 0) return null;
 
-  // Filter by recipient matching
+  // Filter recipient emails to non-self participants
+  const recipientEmails = participantEmails.filter(em => !knownUserEmails.has(em.toLowerCase()));
+
+  // 1. Try recipient matching
   const recipMatches = subjectMatches.filter(e => {
-    return recipientMatchesThread(e.recipient, participantEmails, participantNames, senderText);
+    return recipientMatchesThread(e.recipient, recipientEmails, participantNames, senderText);
   });
 
   let candidates = recipMatches;
-  // Fall back to subject matches when recipient extraction was ambiguous (e.g., display names in Sent list),
-  // unless we have explicit participant emails that contradict multiple different recipients with the same subject.
-  if (candidates.length === 0 && subjectMatches.length > 0) {
-    const uniqueRecipients = new Set(
-      subjectMatches.map(e => (e.recipient || '').toLowerCase().trim()).filter(Boolean)
-    );
-    if (uniqueRecipients.size <= 1 || participantEmails.length === 0) {
-      candidates = subjectMatches;
-    }
+
+  // 2. Fall back to scoring candidates from subjectMatches when no direct recipient matched
+  if (candidates.length === 0) {
+    const scored = subjectMatches.map(e => {
+      let score = 0;
+      const recip = (e.recipient || '').toLowerCase();
+      const username = recip.split('@')[0] || '';
+      for (const nm of participantNames) {
+        if (nm && nm !== 'me' && nm.length >= 3) {
+          if (recip.includes(nm)) score += 50;
+          else if (username.includes(nm) || nm.includes(username)) score += 30;
+        }
+      }
+      if (senderText) {
+        const recipTokens = recip.split(/[^a-z0-9]+/i).filter(t => t.length >= 3);
+        for (const tok of recipTokens) {
+          if (senderText.includes(tok)) score += 40;
+        }
+      }
+      // Recency score (newest gets higher score)
+      const ts = new Date(e.created_at || 0).getTime();
+      score += Math.min(ts / 1e12, 10);
+      return { email: e, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const topRecipient = (scored[0].email.recipient || '').toLowerCase().trim();
+    candidates = subjectMatches.filter(e => (e.recipient || '').toLowerCase().trim() === topRecipient);
+    if (candidates.length === 0) candidates = [scored[0].email];
   }
 
   if (candidates.length === 0) return null;
@@ -695,24 +748,54 @@ function injectSentBadges() {
 
   emailRows.forEach(row => {
     try {
-      const subjectEl = row.querySelector('.bog') || row.querySelector('span.bqe') || row.querySelector('span[data-thread-id]');
+      const subjectEl = row.querySelector('span.bqe') || row.querySelector('.bog') || row.querySelector('span[data-thread-id]');
       if (!subjectEl) return;
       const clone = subjectEl.cloneNode(true);
-      clone.querySelectorAll('.y2').forEach(el => el.remove());
+      clone.querySelectorAll('.y2, .y6, .bql').forEach(el => el.remove());
       let subject = clone.textContent.trim();
+      const dashMatch = subject.match(/\s+[-–—]\s+/);
+      if (dashMatch && dashMatch.index > 0) {
+        const candidate = subject.substring(0, dashMatch.index).trim();
+        if (candidate.length >= 3) {
+          subject = candidate;
+        }
+      }
 
       const senderCell = row.querySelector('.yW');
       const senderText = (senderCell ? senderCell.textContent : '').toLowerCase();
 
       // Collect all participant emails and names in this thread row
-      const participantEls = row.querySelectorAll('.yW [email], .yW .yP, .yW .zF, .yW span[name], td.yX [email]');
+      const participantEls = row.querySelectorAll('.yW [email], .yW .yP, .yW .zF, .yW span[name], td.yX [email], .yW [data-hovercard-id], .yW [data-hovercard-owner-id], .yW span[title]');
       const participantEmails = [];
       const participantNames = [];
       participantEls.forEach(el => {
-        const em = el.getAttribute('email');
-        if (em) participantEmails.push(em.toLowerCase().trim());
-        const nm = el.getAttribute('name') || el.textContent;
-        if (nm) participantNames.push(nm.toLowerCase().trim());
+        const em = el.getAttribute('email') || 
+                   el.getAttribute('data-hovercard-id') || 
+                   el.getAttribute('data-hovercard-owner-id');
+        if (em && em.includes('@')) {
+          participantEmails.push(em.toLowerCase().trim());
+        }
+
+        const title = el.getAttribute('title') || '';
+        if (title) {
+          const emailInTitle = title.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+          if (emailInTitle) {
+            participantEmails.push(emailInTitle[0].toLowerCase().trim());
+          }
+          const cleanTitle = title.replace(/<[^>]+>/g, '').trim().toLowerCase();
+          if (cleanTitle && cleanTitle !== 'me' && cleanTitle.length >= 3) {
+            participantNames.push(cleanTitle);
+          }
+        }
+
+        const nm = el.getAttribute('name');
+        if (nm && nm !== 'me' && nm.length >= 3) {
+          participantNames.push(nm.toLowerCase().trim());
+        }
+        const txt = el.textContent ? el.textContent.trim().toLowerCase() : '';
+        if (txt && txt !== 'me' && txt.length >= 3) {
+          participantNames.push(txt);
+        }
       });
 
       const currentUser = (getActiveSenderEmail() || '').toLowerCase();
@@ -914,8 +997,8 @@ function injectEmailViewFeatures() {
 
     const emailCard = dateEl.closest('.adn');
     if (emailCard) {
-      const senderEl = emailCard.querySelector('.gD');
-      const senderEmail = senderEl ? senderEl.getAttribute('email') : null;
+      const senderEl = emailCard.querySelector('.gD') || emailCard.querySelector('span[email]');
+      const senderEmail = senderEl ? (senderEl.getAttribute('email') || senderEl.getAttribute('data-hovercard-id')) : null;
       if (senderEmail && selfEmails.size > 0 && !selfEmails.has(senderEmail.toLowerCase().trim())) {
         return;
       }
@@ -1120,6 +1203,7 @@ function prepareEmailTracking(compose) {
   }
 
   if (Object.keys(contactUpdates).length > 0) {
+    Object.assign(knownContactNames, contactUpdates);
     try {
       if (typeof chrome !== 'undefined' && chrome.storage?.local) {
         chrome.storage.local.get(['contactNames'], (data) => {
@@ -1420,7 +1504,7 @@ function applyRawEmailsToCache(rawEmails) {
 // ------ Storage Listener (Reads Cache Directly — No Echo API Storm!) ------
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local') {
-    if (changes.session || changes.sessions || changes.browserSenders || changes.ownEmailMap) {
+    if (changes.session || changes.sessions || changes.browserSenders || changes.ownEmailMap || changes.contactNames) {
       updateKnownUserEmails();
     }
 
