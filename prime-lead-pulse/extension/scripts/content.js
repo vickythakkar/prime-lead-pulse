@@ -1596,13 +1596,12 @@ chrome.runtime.onMessage.addListener((request) => {
   }
 });
 
-// Initial load and persistent background polling trigger
+// Initial load trigger (background worker alarm handles periodic checks)
 function triggerPoll() {
   chrome.runtime.sendMessage({ action: 'FORCE_POLL' });
 }
 
 triggerPoll();
-setInterval(triggerPoll, 30000); // Trigger background poll every 30 seconds
 
 // Keep service worker connected while user has Gmail open
 let keepAlivePort = null;

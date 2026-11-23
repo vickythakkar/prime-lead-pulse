@@ -531,7 +531,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         try {
           // 1. Primary path: Direct Supabase PostgREST query (0 Vercel invocations / CPU!)
           if (session && session.access_token) {
-            freshEmails = await fetchEmailsDirectFromSupabase(session, activeApiUrl, senderEmail, 150);
+            freshEmails = await fetchEmailsDirectFromSupabase(session, activeApiUrl, senderEmail, 75);
             maybeSyncVercelSenderCookie(session, activeApiUrl, senderEmail);
           }
 
@@ -540,8 +540,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const base = activeApiUrl.replace(/\/$/, '');
             const sendersCsv = (await getKnownBrowserSenders()).join(',');
             const queryUrl = senderEmail 
-              ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=150&t=${Date.now()}`
-              : `${base}/api/emails?limit=150&t=${Date.now()}`;
+              ? `${base}/api/emails?sender_email=${encodeURIComponent(senderEmail)}&limit=75&t=${Date.now()}`
+              : `${base}/api/emails?limit=75&t=${Date.now()}`;
             
             const headers = {};
             if (sendersCsv) headers['X-PLP-Browser-Senders'] = sendersCsv;
@@ -974,8 +974,8 @@ chrome.idle.onStateChanged.addListener((newState) => {
   }
 });
 
-// Poll Supabase directly every 30 seconds (0.5 minutes) while active — ZERO Vercel CPU!
-chrome.alarms.create("pollStats", { periodInMinutes: 0.5 });
+// Poll Supabase directly every 1.5 minutes while active — ZERO Vercel CPU, minimal Supabase egress!
+chrome.alarms.create("pollStats", { periodInMinutes: 1.5 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "pollStats") {
@@ -999,7 +999,7 @@ async function pollForNotifications() {
   if (isIdle) return;
 
   const { lastPoll } = await chrome.storage.local.get('lastPoll');
-  if (lastPoll && Date.now() - lastPoll < 25000) return; // 25s throttle
+  if (lastPoll && Date.now() - lastPoll < 60000) return; // 60s throttle
   await chrome.storage.local.set({ lastPoll: Date.now() });
 
   if (isPolling) return;
@@ -1027,10 +1027,10 @@ async function pollForNotifications() {
     const currentKnownIds = new Set(knownEventIds || []);
     const newEventsToNotify = [];
 
-    // Poll Supabase PostgREST directly for each unique account (ZERO Vercel invocations!)
+    // Poll Supabase PostgREST for lightweight recent activity check (25 rows = ~7 KB vs 150 rows = ~75 KB)
     const emailsBySenderKey = new Map();
     for (const currentSession of activeSessions) {
-      const emails = await fetchEmailsDirectFromSupabase(currentSession, activeApiUrl, currentSession.user?.email, 150);
+      const emails = await fetchEmailsDirectFromSupabase(currentSession, activeApiUrl, currentSession.user?.email, 25);
       if (!emails) continue;
 
       maybeSyncVercelSenderCookie(currentSession, activeApiUrl, currentSession.user?.email);
@@ -1043,6 +1043,13 @@ async function pollForNotifications() {
       });
       for (const s of senders) {
         const map = emailsBySenderKey.get(s) || new Map();
+        // Preserve any previously loaded historical emails from local storage
+        const key = `cached_emails_${s}`;
+        const existingData = await chrome.storage.local.get([key]);
+        const existingList = existingData[key] || [];
+        for (const e of existingList) {
+          if (e && e.id) map.set(e.id, e);
+        }
         for (const e of emails) {
           if (e && e.id) map.set(e.id, e);
         }
